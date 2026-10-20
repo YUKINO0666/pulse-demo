@@ -962,7 +962,7 @@
       PULSE
     </a>
     <div class="topbar-meta">
-      <button type="button" id="tourRestart" class="tour-restart" hidden aria-label="Restart product tour">
+      <button type="button" id="tourRestart" class="tour-restart" aria-label="Restart product tour">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
         Restart tour
       </button>
@@ -1330,6 +1330,7 @@
       allowClose: true,
       onDestroyed: () => {
         markTourCompleted();
+        activeDriver = null;
         const btn = document.getElementById('tourRestart');
         if (btn) btn.hidden = false;
       },
@@ -1381,34 +1382,34 @@
     return driverObj;
   }
 
+  let activeDriver = null;
+
   function startTour() {
     if (!window.driver || !window.driver.js || !window.driver.js.driver) {
       // CDN failed — silently no-op (UX: prefer "no tour" over "broken")
       console.warn('Driver.js not loaded — skipping tour.');
       return;
     }
+    // Destroy any existing tour before starting a new one (handles Restart clicks)
+    if (activeDriver) {
+      try { activeDriver.destroy(); } catch (e) {}
+      activeDriver = null;
+    }
     buildDriver().drive();
   }
 
-  // Auto-start the first time the page loads
+  // Auto-start the tour every time the page loads (user-requested behavior).
+  // Driver.js's × button serves as the skip affordance.
   function maybeStartTour() {
-    if (tourCompleted()) {
-      const btn = document.getElementById('tourRestart');
-      if (btn) btn.hidden = false;
-      return;
-    }
+    const restartBtn = document.getElementById('tourRestart');
+    if (restartBtn) restartBtn.hidden = true;
     setTimeout(startTour, TOUR_START_DELAY_MS);
   }
-  // If tour not completed yet, hide the restart button until auto-start kicks in
-  if (!tourCompleted()) {
-    document.getElementById('tourRestart').hidden = true;
-  } else {
-    document.getElementById('tourRestart').hidden = false;
-  }
 
-  // Manual restart trigger
+  // Restart button — always visible so user can re-play tour any time.
   const tourRestartBtn = document.getElementById('tourRestart');
   if (tourRestartBtn) {
+    tourRestartBtn.hidden = false;
     tourRestartBtn.addEventListener('click', () => {
       clearTourCompleted();
       startTour();
