@@ -955,15 +955,11 @@
   </div>
 </header>
 
-<div class="topbar" role="banner">
+<div class="topbar">
   <div class="topbar-inner">
     <a href="./landing-demo.html?from=analyzer" class="breadcrumb-back" aria-label="Back to PULSE home">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
       PULSE
-    </a>
-    <a href="#" class="brand" aria-label="PULSE home">
-      <span class="brand-mark" aria-hidden="true">P</span>
-      <span>Spectrum analyzer</span>
     </a>
     <div class="topbar-meta">
       <button type="button" id="tourRestart" class="tour-restart" hidden aria-label="Restart product tour">
@@ -1013,7 +1009,7 @@
 
     <article class="kpi" aria-label="Classifier confidence">
       <div class="kpi-label">Classifier confidence <span class="kpi-status" aria-hidden="true"></span></div>
-      <div class="kpi-value" data-counter="94"><span class="suffix">%</span></div>
+      <div class="kpi-value" data-counter="94">0<span class="suffix">%</span></div>
       <div class="kpi-meta"><span>model rf-cls-v3</span></div>
     </article>
   </div>
@@ -1120,9 +1116,15 @@
               </div>
 
       <div class="panel" data-tour-id="detections">
+        <div class="panel-head">
+          <h2 class="panel-title">
+            <span class="panel-title-icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            </span>
+            Recent detections
+          </h2>
           <p class="panel-sub">Most recent first · click a row for full spectrum</p>
         </div>
-
         <div class="detection-list" id="detectionsList">
           <div class="detection" data-severity="critical">
             <span class="detection-badge" aria-hidden="true"></span>
@@ -1165,9 +1167,9 @@
             <span class="detection-time">12:18 ago</span>
           </div>
         </div>
+      </div>
 
-              </div>
-    </section>
+              </aside>
 
     <!-- ===== RIGHT: LIVE ALERTS ===== -->
     <aside class="right-rail" aria-label="Live alerts feed" data-tour-id="alerts">
