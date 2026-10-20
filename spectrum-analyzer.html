@@ -1,0 +1,1572 @@
+<!--
+  UX/UI Design Brief — RF Spectrum Analyzer (v2)
+  ================================================
+  understanding:
+    user: SOC analyst / RF engineer. Pain point: dense dashboards make
+          scanning difficult. Want calmer, guided experience without losing
+          signal-density value.
+    primary_task: detect anomaly ใน spectrum ภายใน 5 วินาที
+    constraints: single HTML, light theme (matches landing/wizard),
+                 SVG spectrum chart (was heavy canvas waterfall),
+                 every major section has a tour tip card.
+    success: 5-second glance reveals threat count + signal status;
+             tour tips explain the 4 panels without leaving the page.
+
+  visual_direction:
+    accent:    #5b8def (matches landing/wizard — calm, technical)
+    semantic:  cyan #06b6d4 reserved for "live" pulsing state only
+    font:      Inter (sans) + JetBrains Mono (numbers/codes)
+    mood:      calm / airy / spacious — like Linear, not a SOC console
+    reference: linear.app airy layout, ploomes.com dashboard calm,
+               datadog.com panel composition (but lighter)
+    explicitly_avoid: dense monospace rows, dark console aesthetic,
+                      every-pixel data display, neon colors
+
+  improvements vs v1:
+    - light theme (was dark) — keeps same #5b8def accent family
+    - SVG line chart replaces 250ms-shifting canvas waterfall — less code,
+      more breathing room, no GPU pressure
+    - 3 tour tip cards inline + dismissable tour banner
+    - layout widened, spacing scale 4/8/16/24/40/64
+    - panel cards have 8px radius, 1px border, no thick shadow
+
+  animations (every one has a purpose):
+    - spectrum chart line redraws every 600ms (ease-out) → continuous data
+    - live dot pulse 1.6s (status indicator, not content)
+    - panel fade-up on scroll    → sections appear naturally
+    - new alert slide-in 320ms ease-out → wayfinding
+    - critical alert subtle ring (600ms × 1, not infinite) → draw eye once
+    - reduced-motion: durations collapse to 0.01ms
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light" />
+<title>Spectrum analyzer · PULSE</title>
+<meta name="active-tab" content="analyzer" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" />
+<!-- Driver.js (same tour engine as quantum-shield-demo.html) -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.css" />
+<style>
+  /* ---------- Tokens (light, airy) ---------- */
+  :root {
+    --color-bg:        #fbfcfe;
+    --color-bg-tinted: #f4f7fc;
+    --color-surface:   #ffffff;
+    --color-border:    #e8edf5;
+    --color-border-2:  #dde5f0;
+    --color-text:      #0f172a;
+    --color-text-2:    #334155;
+    --color-text-mute: #64748b;
+    --color-text-faint:#94a3b8;
+
+    --color-accent:       #5b8def;
+    --color-accent-hover: #4a7be0;
+    --color-accent-soft:  #eaf1ff;
+    --color-accent-ink:   #1e3a8a;
+
+    --color-success:       #16a34a;
+    --color-success-soft:  #dcfce7;
+    --color-warn:          #d97706;
+    --color-warn-soft:     #fef3c7;
+    --color-danger:        #dc2626;
+    --color-danger-soft:   #fee2e2;
+
+    /* live status — cyan ONLY for live/streaming indicators */
+    --color-live:          #06b6d4;
+
+    --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px;
+    --s-5: 24px; --s-6: 40px;
+
+    --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px;
+    --radius-full: 9999px;
+
+    --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+    --shadow-sm: 0 2px 8px rgba(15, 23, 42, 0.05);
+    --shadow-md: 0 8px 28px rgba(15, 23, 42, 0.06);
+
+    --duration-micro:  150ms;
+    --duration-small:  240ms;
+    --duration-medium: 320ms;
+
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-in:  cubic-bezier(0.4, 0, 1, 1);
+
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+    --layout-max: 1280px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.55;
+    min-height: 100vh;
+    position: relative;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  /* soft page anchor (no AI gradient soup — single soft tone) */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(1200px 480px at 50% -120px, var(--color-accent-soft) 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .skip-link {
+    position: absolute;
+    top: -40px;
+    left: var(--s-4);
+    background: var(--color-text);
+    color: white;
+    padding: var(--s-2) var(--s-4);
+    border-radius: var(--radius-sm);
+    text-decoration: none;
+    z-index: 100;
+    transition: top var(--duration-micro) var(--ease-out);
+  }
+  .skip-link:focus { top: var(--s-4); }
+
+  /* ---------- Layout ---------- */
+  .topbar {
+    background: transparent;
+    padding: var(--s-4) var(--s-6);
+    position: relative;
+    z-index: 1;
+  }
+  .topbar-inner {
+    max-width: var(--layout-max);
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-4);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    color: var(--color-text);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 15px;
+  }
+  .brand-mark {
+    width: 28px; height: 28px;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(135deg, var(--color-accent), #8b5cf6);
+    display: grid; place-items: center;
+    color: white;
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .breadcrumb-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-mute);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background var(--duration-micro) var(--ease-out),
+                color var(--duration-micro) var(--ease-out);
+  }
+  .breadcrumb-back:hover {
+    background: var(--color-bg-tinted);
+    color: var(--color-accent);
+  }
+  .breadcrumb-back:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  .add-device-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: var(--radius-full);
+    background: var(--color-surface);
+    color: var(--color-text-2);
+    border: 1px solid var(--color-border-2);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background var(--duration-micro) var(--ease-out),
+                border-color var(--duration-micro) var(--ease-out),
+                color var(--duration-micro) var(--ease-out);
+  }
+  .add-device-btn:hover {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+    background: var(--color-accent-soft);
+  }
+  .add-device-btn:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  .topbar-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    font-size: 13px;
+    color: var(--color-text-mute);
+  }
+  .live-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-2);
+    padding: 6px 12px;
+    border-radius: var(--radius-full);
+    background: var(--color-accent-soft);
+    color: var(--color-accent-ink);
+    font-size: 13px;
+    font-weight: 500;
+    font-family: var(--font-mono);
+  }
+  .live-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--color-live);
+    animation: pulse 1.6s ease-in-out infinite;
+    box-shadow: 0 0 0 0 var(--color-live);
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(6, 182, 212, 0.6); }
+    50%      { box-shadow: 0 0 0 6px rgba(6, 182, 212, 0); }
+  }
+
+  .main {
+    max-width: var(--layout-max);
+    margin: 0 auto;
+    padding: var(--s-4) var(--s-6) var(--s-6);
+    position: relative;
+    z-index: 1;
+  }
+
+  /* section stripes — separator between page sections
+     gives the eye quiet differentiators without adding noise */
+  .section-stripe {
+    margin: var(--s-5) 0;
+    border-top: 1px solid var(--color-border);
+    position: relative;
+  }
+  .section-stripe::before {
+    content: '';
+    position: absolute;
+    top: -1px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 64px;
+    height: 1px;
+    background: var(--color-accent);
+  }
+
+  /* welcome header */
+  .welcome {
+    margin-bottom: var(--s-5);
+  }
+  .welcome h1 {
+    margin: 0 0 var(--s-2);
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+  }
+  .welcome p {
+    margin: 0;
+    color: var(--color-text-mute);
+    font-size: 15px;
+    max-width: 60ch;
+  }
+
+  /* Gateway-just-enrolled banner (shown when user came from wizard) */
+  .welcome-banner {
+    background: var(--color-success-soft);
+    border: 1px solid #bbf7d0;
+    border-radius: var(--radius-lg);
+    padding: var(--s-4) var(--s-5);
+    margin-bottom: var(--s-5);
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    animation: fade-down 320ms var(--ease-out);
+  }
+  @keyframes fade-down {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .welcome-banner-icon {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: var(--color-success);
+    color: white;
+    display: grid; place-items: center;
+    flex-shrink: 0;
+  }
+  .welcome-banner-body { flex: 1; }
+  .welcome-banner-title {
+    font-weight: 600;
+    color: #14532d;
+    font-size: 14px;
+    margin-bottom: 2px;
+  }
+  .welcome-banner-text {
+    color: #14532d;
+    font-size: 13px;
+    line-height: 1.5;
+    opacity: 0.85;
+  }
+  .welcome-banner-text code {
+    font-family: var(--font-mono);
+    background: rgba(20, 83, 45, 0.08);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 12px;
+  }
+
+  /* ============================================================
+     DEMO-SWITCHER NAV — sticky tab bar (shared across 3 demos)
+     ============================================================ */
+  .demo-nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: saturate(180%) blur(12px);
+    -webkit-backdrop-filter: saturate(180%) blur(12px);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .demo-nav-inner {
+    max-width: var(--layout-max);
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-5);
+    padding: 0 var(--s-6);
+    height: 56px;
+  }
+  .demo-nav-brand {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    text-decoration: none;
+    color: var(--color-text);
+    font-weight: 600;
+    font-size: 15px;
+    flex-shrink: 0;
+  }
+  .demo-nav-brand-mark {
+    width: 28px; height: 28px;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(135deg, var(--color-accent), #8b5cf6);
+    display: grid; place-items: center;
+    color: white;
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .demo-nav-brand-name { letter-spacing: -0.01em; }
+  .demo-nav-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+    justify-content: center;
+  }
+  .demo-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: var(--radius-full);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text-mute);
+    text-decoration: none;
+    transition: background var(--duration-micro) var(--ease-out),
+                color var(--duration-micro) var(--ease-out);
+    white-space: nowrap;
+  }
+  .demo-tab:hover {
+    background: var(--color-bg-tinted);
+    color: var(--color-text);
+  }
+  .demo-tab.is-active {
+    background: var(--color-accent-soft);
+    color: var(--color-accent-ink);
+    font-weight: 600;
+  }
+  .demo-tab:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  .demo-tab svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+  .demo-nav-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    flex-shrink: 0;
+    font-size: 13px;
+    color: var(--color-text-mute);
+  }
+  @media (max-width: 720px) {
+    .demo-nav-inner { gap: var(--s-3); padding: 0 var(--s-4); }
+    .demo-nav-brand-name { display: none; }
+    .demo-tab { padding: 6px 10px; }
+    .demo-tab span:not(.demo-tab-num) { display: none; }
+  }
+  /* ============================================================
+     PRODUCT TOUR — Driver.js themed to match design tokens
+     ============================================================ */
+  .tour-restart {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: var(--radius-full);
+    background: var(--color-accent-soft);
+    color: var(--color-accent-ink);
+    border: 1px solid #dde8ff;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background var(--duration-micro) var(--ease-out),
+                border-color var(--duration-micro) var(--ease-out);
+  }
+  .tour-restart:hover {
+    background: #dde8ff;
+    border-color: var(--color-accent);
+  }
+  .tour-restart:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  /* Driver.js popover — re-themed to match our token system */
+  .driver-popover {
+    border-radius: var(--radius-md) !important;
+    box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18) !important;
+    background: var(--color-surface) !important;
+    color: var(--color-text) !important;
+    border: 1px solid var(--color-border) !important;
+    font-family: var(--font-sans) !important;
+  }
+  .driver-popover-title {
+    font-size: 15px !important;
+    font-weight: 600 !important;
+    color: var(--color-text) !important;
+    margin: 0 0 var(--s-2) !important;
+  }
+  .driver-popover-description {
+    font-size: 13px !important;
+    line-height: 1.55 !important;
+    color: var(--color-text-2) !important;
+  }
+  .driver-popover-progress-text {
+    font-family: var(--font-mono) !important;
+    font-size: 11px !important;
+    color: var(--color-text-mute) !important;
+  }
+  .driver-popover-footer {
+    margin-top: var(--s-4) !important;
+  }
+  .driver-popover-prev-btn,
+  .driver-popover-next-btn {
+    background: var(--color-surface) !important;
+    color: var(--color-text-2) !important;
+    border: 1px solid var(--color-border-2) !important;
+    border-radius: var(--radius-sm) !important;
+    font-family: inherit !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    padding: 8px 14px !important;
+    transition: all var(--duration-micro) var(--ease-out) !important;
+  }
+  .driver-popover-prev-btn:hover,
+  .driver-popover-next-btn:hover {
+    border-color: var(--color-accent) !important;
+    color: var(--color-accent) !important;
+  }
+  .driver-popover-next-btn.driver-popover-next-btn {
+    background: var(--color-accent) !important;
+    border-color: var(--color-accent) !important;
+    color: white !important;
+  }
+  .driver-popover-next-btn.driver-popover-next-btn:hover {
+    background: var(--color-accent-hover) !important;
+    border-color: var(--color-accent-hover) !important;
+    color: white !important;
+  }
+  .driver-popover-arrow {
+    border-color: var(--color-surface) !important;
+  }
+  .driver-popover-close-btn {
+    color: var(--color-text-faint) !important;
+  }
+  .driver-popover-close-btn:hover {
+    color: var(--color-text) !important;
+  }
+
+  /* ---------- Layout grid ---------- */
+  .grid {
+    display: grid;
+    grid-template-columns: 240px 1fr 280px;
+    gap: var(--s-5);
+    align-items: start;
+  }
+  @media (max-width: 1100px) {
+    .grid { grid-template-columns: 1fr; }
+    .right-rail { order: -1; }
+  }
+
+  /* ---------- Sidebar / panel base ---------- */
+  .panel {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    box-shadow:
+      0 1px 2px rgba(15, 23, 42, 0.04),
+      0 4px 12px rgba(15, 23, 42, 0.03);
+    margin-bottom: var(--s-4);
+    overflow: hidden;
+    transition: box-shadow var(--duration-micro) var(--ease-out),
+                border-color var(--duration-micro) var(--ease-out);
+  }
+  .panel:hover {
+    box-shadow:
+      0 2px 4px rgba(15, 23, 42, 0.05),
+      0 8px 20px rgba(15, 23, 42, 0.05);
+    border-color: #dde5f0;
+  }
+  .panel:last-child { margin-bottom: 0; }
+  /* panels with stronger elevation — controls/hero panels */
+  .panel.is-elevated {
+    border-color: var(--color-border-2);
+    box-shadow:
+      0 1px 2px rgba(15, 23, 42, 0.05),
+      0 6px 18px rgba(15, 23, 42, 0.06);
+  }
+  /* panels with tinted header strip — anchor visually */
+  .panel.is-tinted-head .panel-head {
+    background: linear-gradient(180deg, var(--color-bg-tinted) 0%, var(--color-surface) 100%);
+    border-bottom: 1px solid var(--color-border);
+    padding-bottom: var(--s-4);
+  }
+  .panel-head {
+    padding: var(--s-4) var(--s-5) var(--s-3);
+  }
+  .panel-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text);
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    letter-spacing: -0.005em;
+  }
+  .panel-title-icon {
+    width: 28px; height: 28px;
+    border-radius: 7px;
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    display: grid; place-items: center;
+  }
+  .panel-sub {
+    margin: var(--s-2) 0 0;
+    font-size: 12px;
+    color: var(--color-text-faint);
+  }
+  .panel-body { padding: 0 var(--s-5) var(--s-5); }
+
+  /* sidebar section */
+  .sidebar {
+    position: sticky;
+    top: var(--s-4);
+  }
+  .filter-group { padding: var(--s-3) 0; border-top: 1px solid var(--color-border); }
+  .filter-group:first-child { padding-top: 0; border-top: none; }
+  .filter-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-mute);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: var(--s-3);
+    padding: 0 var(--s-5);
+  }
+  .filter-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 var(--s-5);
+  }
+
+  /* chips */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: var(--radius-full);
+    border: 1px solid var(--color-border-2);
+    background: var(--color-surface);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--color-text-2);
+    cursor: pointer;
+    transition:
+      background var(--duration-micro) var(--ease-out),
+      border-color var(--duration-micro) var(--ease-out),
+      color var(--duration-micro) var(--ease-out),
+      transform 120ms var(--ease-out);
+    font-family: inherit;
+  }
+  .chip:hover { border-color: var(--color-accent); color: var(--color-accent); }
+  .chip:active { transform: scale(0.96); }
+  .chip:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .chip.is-active {
+    background: var(--color-accent-soft);
+    border-color: var(--color-accent);
+    color: var(--color-accent-ink);
+  }
+
+  /* input */
+  .input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1.5px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-surface);
+    color: var(--color-text);
+    font: inherit;
+    font-size: 13px;
+    font-family: var(--font-mono);
+    transition:
+      border-color var(--duration-micro) var(--ease-out),
+      box-shadow var(--duration-micro) var(--ease-out);
+  }
+  .input::placeholder { color: var(--color-text-faint); }
+  .input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px rgba(91, 141, 239, 0.18);
+  }
+
+  /* ---------- KPI grid ---------- */
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--s-4);
+    margin-bottom: var(--s-5);
+  }
+  @media (max-width: 800px) {
+    .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+  .kpi {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: var(--s-4) var(--s-5);
+    box-shadow:
+      0 1px 2px rgba(15, 23, 42, 0.04),
+      0 2px 8px rgba(15, 23, 42, 0.04);
+    transition: box-shadow var(--duration-micro) var(--ease-out),
+                transform var(--duration-micro) var(--ease-out),
+                border-color var(--duration-micro) var(--ease-out);
+    position: relative;
+    overflow: hidden;
+  }
+  .kpi::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: var(--color-success);
+    border-radius: 12px 12px 0 0;
+  }
+  .kpi.is-warn::before   { background: var(--color-warn); }
+  .kpi.is-danger::before { background: var(--color-danger); }
+  .kpi:hover {
+    box-shadow:
+      0 4px 12px rgba(15, 23, 42, 0.06),
+      0 8px 24px rgba(15, 23, 42, 0.06);
+    transform: translateY(-1px);
+    border-color: #dde5f0;
+  }
+  .kpi-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--color-text-mute);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: var(--s-3);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .kpi-status {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--color-success);
+  }
+  .kpi.is-danger .kpi-status { background: var(--color-danger); }
+  .kpi.is-warn   .kpi-status { background: var(--color-warn); }
+  .kpi-value {
+    font-family: var(--font-mono);
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--color-text);
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    margin-bottom: 6px;
+  }
+  .kpi-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--color-text-mute);
+  }
+  .kpi-delta { font-family: var(--font-mono); font-weight: 500; }
+  .kpi-delta.up { color: var(--color-success); }
+  .kpi-delta.down { color: var(--color-danger); }
+
+  /* ---------- Spectrum chart ---------- */
+  .spectrum-panel {
+    padding: 0;
+    border: 1px solid #dde8ff;
+    box-shadow:
+      0 0 0 1px rgba(91, 141, 239, 0.06),
+      0 8px 24px rgba(15, 23, 42, 0.08) !important;
+  }
+  .spectrum-panel .panel-head {
+    background:
+      linear-gradient(180deg, var(--color-accent-soft) 0%, var(--color-surface) 100%);
+    border-bottom: 1px solid #dde8ff;
+    padding-bottom: var(--s-4);
+  }
+  .spectrum-wrap {
+    position: relative;
+    background: linear-gradient(180deg, #ffffff 0%, #f4f7fc 70%, #eaf1ff 100%);
+    padding: var(--s-4) var(--s-5);
+  }
+  .spectrum-svg {
+    width: 100%;
+    height: 220px;
+    display: block;
+  }
+  .spectrum-grid line { stroke: var(--color-border); stroke-dasharray: 2 4; }
+  .spectrum-baseline { stroke: var(--color-text-faint); stroke-width: 1; }
+  .spectrum-area { fill: var(--color-accent); fill-opacity: 0.12; }
+  .spectrum-line {
+    fill: none; stroke: var(--color-accent); stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+    transition: d 600ms var(--ease-out);
+  }
+  .spectrum-band {
+    fill: var(--color-warn-soft);
+    fill-opacity: 0.5;
+  }
+  .spectrum-band-label {
+    font-family: var(--font-mono);
+    font-size: 9px;
+    fill: var(--color-text-faint);
+    text-anchor: middle;
+  }
+
+  .spectrum-axis {
+    display: flex;
+    justify-content: space-between;
+    padding: var(--s-3) var(--s-5) 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-faint);
+  }
+  .spectrum-readout {
+    display: flex;
+    gap: var(--s-4);
+    padding: var(--s-3) var(--s-5) var(--s-5);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--color-text-mute);
+  }
+  .spectrum-readout strong {
+    color: var(--color-text);
+    font-weight: 600;
+  }
+
+  /* ---------- Detections list ---------- */
+  .detection-list { padding: 0 var(--s-5) var(--s-3); }
+  .detection {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: var(--s-3);
+    padding: var(--s-3) 0;
+    border-top: 1px solid var(--color-border);
+    font-size: 13px;
+  }
+  .detection:first-child { border-top: none; }
+  .detection-badge {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--color-warn);
+  }
+  .detection[data-severity="critical"] .detection-badge { background: var(--color-danger); }
+  .detection[data-severity="low"]      .detection-badge { background: var(--color-text-faint); }
+  .detection-name { font-weight: 500; color: var(--color-text); }
+  .detection-band {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-mute);
+    margin-left: 4px;
+  }
+  .detection-time {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-text-faint);
+    text-align: right;
+  }
+
+  /* ---------- Right rail: alerts ---------- */
+  .alert-list { padding: 0 var(--s-5) var(--s-4); }
+  .alert {
+    padding: var(--s-3) 0;
+    border-top: 1px solid var(--color-border);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 13px;
+    animation: alert-in 320ms var(--ease-out);
+  }
+  .alert:first-child { border-top: none; }
+  @keyframes alert-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .alert-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+  }
+  .alert-tag {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 600;
+    padding: 2px 6px;
+    border-radius: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .alert-tag.critical { background: var(--color-danger-soft); color: var(--color-danger); }
+  .alert-tag.high     { background: var(--color-warn-soft);    color: var(--color-warn); }
+  .alert-tag.medium   { background: var(--color-accent-soft); color: var(--color-accent-ink); }
+  .alert-tag.low      { background: var(--color-bg-tinted);    color: var(--color-text-mute); }
+  .alert-time {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--color-text-faint);
+  }
+  .alert-name {
+    color: var(--color-text);
+    font-weight: 500;
+    line-height: 1.35;
+  }
+  .alert-meta {
+    color: var(--color-text-mute);
+    font-size: 11px;
+    font-family: var(--font-mono);
+  }
+
+  /* panel with tip at bottom */
+  .panel-head + .panel-body { border-bottom: 1px solid var(--color-border); }
+
+  /* ---------- Bottom-row layout ---------- */
+  .bottom-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: var(--s-4);
+    margin-top: var(--s-4);
+  }
+  @media (max-width: 960px) { .bottom-grid { grid-template-columns: 1fr; } }
+
+  /* focusable reset for SVG */
+  svg { outline: none; }
+
+  /* ---------- Reduced motion ---------- */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+</style>
+<script defer src="https://cdn.jsdelivr.net/npm/driver.js@1.0.1/dist/driver.js.iife.js"></script>
+</head>
+<body>
+<a href="#main" class="skip-link">Skip to main content</a>
+
+<header class="demo-nav" id="demoNav" role="banner">
+  <div class="demo-nav-inner">
+    <a class="demo-nav-brand" href="./landing-demo.html?from=demo-nav">
+      <span class="demo-nav-brand-mark" aria-hidden="true">P</span>
+      <span class="demo-nav-brand-name">PULSE</span>
+    </a>
+    <nav class="demo-nav-tabs" aria-label="Demo pages">
+      <a class="demo-tab" href="./landing-demo.html?from=demo-nav" data-tab="overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span>Overview</span>
+      </a>
+      <a class="demo-tab" href="./onboarding-wizard.html?from=demo-nav" data-tab="wizard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>Setup</span>
+      </a>
+      <a class="demo-tab" href="./spectrum-analyzer.html?from=demo-nav" data-tab="analyzer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18l4-6 4 6 4-12 4 12 2-4"/></svg>
+        <span>Live dashboard</span>
+      </a>
+    </nav>
+    <div class="demo-nav-meta" aria-hidden="true"></div>
+  </div>
+</header>
+
+<div class="topbar" role="banner">
+  <div class="topbar-inner">
+    <a href="./landing-demo.html?from=analyzer" class="breadcrumb-back" aria-label="Back to PULSE home">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      PULSE
+    </a>
+    <a href="#" class="brand" aria-label="PULSE home">
+      <span class="brand-mark" aria-hidden="true">P</span>
+      <span>Spectrum analyzer</span>
+    </a>
+    <div class="topbar-meta">
+      <button type="button" id="tourRestart" class="tour-restart" hidden aria-label="Restart product tour">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Restart tour
+      </button>
+      <a href="./onboarding-wizard.html?from=analyzer" class="add-device-btn" aria-label="Add another gateway">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Add gateway
+      </a>
+      <span id="siteLabel">Site · Korat-NTH-02</span>
+      <span class="live-pill" aria-label="Live, sweep every 250 ms">
+        <span class="live-dot" aria-hidden="true"></span>
+        Live · 250 ms
+      </span>
+    </div>
+  </div>
+</div>
+
+<main id="main" class="main">
+  <div id="welcomeBanner"></div>
+
+  <div class="welcome">
+    <h1>Spectrum analyzer</h1>
+    <p>Detect jamming, spoofing, and unauthorized transmissions across 800 MHz – 6 GHz. Detection runs locally; only metadata leaves the sensor.</p>
+  </div>
+
+  
+  <div class="kpi-grid" data-tour-id="kpi">
+    <article class="kpi is-danger" aria-label="Active threats">
+      <div class="kpi-label">Active threats <span class="kpi-status" aria-hidden="true"></span></div>
+      <div class="kpi-value" data-counter="7">0</div>
+      <div class="kpi-meta"><span>2 critical · 3 high</span></div>
+    </article>
+
+    <article class="kpi is-warn" aria-label="Signals tracked">
+      <div class="kpi-label">Signals tracked <span class="kpi-status" aria-hidden="true"></span></div>
+      <div class="kpi-value" data-counter="1248">0</div>
+      <div class="kpi-meta"><span class="kpi-delta up">▲ 42</span><span>last 5 min</span></div>
+    </article>
+
+    <article class="kpi" aria-label="Noise floor">
+      <div class="kpi-label">Noise floor <span class="kpi-status" aria-hidden="true"></span></div>
+      <div class="kpi-value" data-counter="-104" data-prefix="">−</div>
+      <div class="kpi-meta"><span class="kpi-delta down">▼ 1.2 dB</span><span>vs 1 h ago</span></div>
+    </article>
+
+    <article class="kpi" aria-label="Classifier confidence">
+      <div class="kpi-label">Classifier confidence <span class="kpi-status" aria-hidden="true"></span></div>
+      <div class="kpi-value" data-counter="94"><span class="suffix">%</span></div>
+      <div class="kpi-meta"><span>model rf-cls-v3</span></div>
+    </article>
+  </div>
+
+  <div class="section-stripe" aria-hidden="true"></div>
+
+  <div class="grid">
+
+    <!-- ===== LEFT: FILTERS ===== -->
+    <aside class="sidebar" aria-label="Filters" data-tour-id="filters">
+      <div class="panel is-tinted-head">
+        <div class="panel-head">
+          <h2 class="panel-title">
+            <span class="panel-title-icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 10 22 17 22 3"/><line x1="22" y1="3" x2="9" y2="14"/><polygon points="9 14 9 21 14 18 14 14 9 14"/></svg>
+            </span>
+            Filters
+          </h2>
+        </div>
+
+        <div class="filter-group">
+          <div class="filter-label">Band</div>
+          <div class="filter-options">
+            <button class="chip is-active" aria-pressed="true" type="button">5G NR</button>
+            <button class="chip is-active" aria-pressed="true" type="button">LTE</button>
+            <button class="chip is-active" aria-pressed="true" type="button">GPS</button>
+            <button class="chip is-active" aria-pressed="true" type="button">Wi-Fi</button>
+            <button class="chip" aria-pressed="false" type="button">ISM 868</button>
+            <button class="chip is-active" aria-pressed="true" type="button">LoRa</button>
+          </div>
+        </div>
+
+        <div class="filter-group">
+          <div class="filter-label">Threat</div>
+          <div class="filter-options">
+            <button class="chip is-active" aria-pressed="true" type="button">Jamming</button>
+            <button class="chip is-active" aria-pressed="true" type="button">Spoofing</button>
+            <button class="chip is-active" aria-pressed="true" type="button">Unauthorized</button>
+            <button class="chip" aria-pressed="false" type="button">Drift</button>
+          </div>
+        </div>
+
+        <div class="filter-group">
+          <div class="filter-label" style="margin-bottom: 6px;">Search</div>
+          <div class="filter-options">
+            <input class="input" type="search" placeholder="GPS-L1, 2.45G…" aria-label="Search signal or ID" />
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ===== CENTER: SPECTRUM + DETECTIONS ===== -->
+    <section aria-label="Spectrum and detections">
+      <div class="panel spectrum-panel is-elevated" data-tour-id="spectrum">
+        <div class="panel-head">
+          <h2 class="panel-title">
+            <span class="panel-title-icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18l4-6 4 6 4-12 4 12 2-4"/></svg>
+            </span>
+            Live spectrum
+          </h2>
+          <p class="panel-sub">800 MHz – 6 GHz · updated every 600 ms · signal power in dBm</p>
+        </div>
+
+        <div class="spectrum-wrap">
+          <svg class="spectrum-svg" id="spectrumSvg" viewBox="0 0 1000 220" preserveAspectRatio="none" aria-label="Live RF spectrum chart">
+            <!-- grid lines -->
+            <g class="spectrum-grid" aria-hidden="true">
+              <line x1="0" y1="40" x2="1000" y2="40"/>
+              <line x1="0" y1="100" x2="1000" y2="100"/>
+              <line x1="0" y1="160" x2="1000" y2="160"/>
+            </g>
+            <!-- band highlights -->
+            <g id="spectrumBands" aria-hidden="true">
+              <rect class="spectrum-band" x="180" y="0" width="100" height="220"/>
+              <rect class="spectrum-band" x="280" y="0" width="60" height="220"/>
+              <rect class="spectrum-band" x="430" y="0" width="280" height="220"/>
+              <rect class="spectrum-band" x="780" y="0" width="120" height="220"/>
+            </g>
+            <!-- baseline -->
+            <line class="spectrum-baseline" x1="0" y1="200" x2="1000" y2="200" aria-hidden="true"/>
+            <!-- filled area -->
+            <path class="spectrum-area" id="spectrumArea" d="" aria-hidden="true"/>
+            <!-- main line -->
+            <path class="spectrum-line" id="spectrumLine" d=""/>
+          </svg>
+
+          <div class="spectrum-axis" aria-hidden="true">
+            <span>800 MHz</span>
+            <span>1.5 GHz</span>
+            <span>2.4 GHz</span>
+            <span>3.5 GHz</span>
+            <span>5 GHz</span>
+            <span>6 GHz</span>
+          </div>
+
+          <div class="spectrum-readout">
+            <span><strong>−82 dBm</strong> peak</span>
+            <span><strong>2.450 GHz</strong> peak freq</span>
+            <span><strong>74%</strong> utilization · band Wi-Fi ch6</span>
+          </div>
+        </div>
+
+              </div>
+
+      <div class="panel" data-tour-id="detections">
+          <p class="panel-sub">Most recent first · click a row for full spectrum</p>
+        </div>
+
+        <div class="detection-list" id="detectionsList">
+          <div class="detection" data-severity="critical">
+            <span class="detection-badge" aria-hidden="true"></span>
+            <span>
+              <span class="detection-name">GPS meaconing attempt</span>
+              <span class="detection-band">L1 · 1.575 GHz</span>
+            </span>
+            <span class="detection-time">00:02 ago</span>
+          </div>
+          <div class="detection" data-severity="high">
+            <span class="detection-badge" aria-hidden="true"></span>
+            <span>
+              <span class="detection-name">Barrage jammer</span>
+              <span class="detection-band">2.4 – 2.5 GHz · Wi-Fi</span>
+            </span>
+            <span class="detection-time">00:14 ago</span>
+          </div>
+          <div class="detection" data-severity="high">
+            <span class="detection-badge" aria-hidden="true"></span>
+            <span>
+              <span class="detection-name">Unknown LoRa downlink</span>
+              <span class="detection-band">868.3 MHz · SF7</span>
+            </span>
+            <span class="detection-time">01:30 ago</span>
+          </div>
+          <div class="detection" data-severity="medium">
+            <span class="detection-badge" aria-hidden="true"></span>
+            <span>
+              <span class="detection-name">LTE Band 7 anomaly</span>
+              <span class="detection-band">2.6 GHz · uplink</span>
+            </span>
+            <span class="detection-time">03:42 ago</span>
+          </div>
+          <div class="detection" data-severity="low">
+            <span class="detection-badge" aria-hidden="true"></span>
+            <span>
+              <span class="detection-name">5G NR n78 drift</span>
+              <span class="detection-band">3.5 GHz · 0.4 dB</span>
+            </span>
+            <span class="detection-time">12:18 ago</span>
+          </div>
+        </div>
+
+              </div>
+    </section>
+
+    <!-- ===== RIGHT: LIVE ALERTS ===== -->
+    <aside class="right-rail" aria-label="Live alerts feed" data-tour-id="alerts">
+      <div class="panel is-tinted-head">
+        <div class="panel-head">
+          <h2 class="panel-title">
+            <span class="panel-title-icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            </span>
+            Live alerts
+          </h2>
+          <p class="panel-sub">Newest first · click to expand</p>
+        </div>
+
+        <div class="alert-list" id="alertList">
+          <article class="alert">
+            <div class="alert-head">
+              <span class="alert-tag critical">Critical</span>
+              <span class="alert-time">00:02</span>
+            </div>
+            <div class="alert-name">GPS L1 meaconing attempt</div>
+            <div class="alert-meta">Conf 94% · 1.575 GHz</div>
+          </article>
+          <article class="alert">
+            <div class="alert-head">
+              <span class="alert-tag high">High</span>
+              <span class="alert-time">00:14</span>
+            </div>
+            <div class="alert-name">Wi-Fi barrage jammer</div>
+            <div class="alert-meta">Conf 88% · 2.4–2.5 GHz</div>
+          </article>
+          <article class="alert">
+            <div class="alert-head">
+              <span class="alert-tag high">High</span>
+              <span class="alert-time">01:30</span>
+            </div>
+            <div class="alert-name">Unknown LoRa downlink</div>
+            <div class="alert-meta">Conf 81% · 868.3 MHz</div>
+          </article>
+          <article class="alert">
+            <div class="alert-head">
+              <span class="alert-tag medium">Medium</span>
+              <span class="alert-time">03:42</span>
+            </div>
+            <div class="alert-name">LTE Band 7 anomaly</div>
+            <div class="alert-meta">Conf 72% · 2.6 GHz</div>
+          </article>
+          <article class="alert">
+            <div class="alert-head">
+              <span class="alert-tag low">Low</span>
+              <span class="alert-time">12:18</span>
+            </div>
+            <div class="alert-name">5G NR n78 drift</div>
+            <div class="alert-meta">Conf 65% · 0.4 dB</div>
+          </article>
+        </div>
+
+              </div>
+    </aside>
+  </div>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  /* =================== Handoff from wizard =================== */
+  /* Read device context the wizard wrote (qs-spectrum-site).
+     - Update site label in topbar
+     - Show "Gateway enrolled" banner if user came from wizard
+     - If user comes from wizard, force Driver.js tour to play (wizard clears it)
+   */
+  const SITE_KEY = 'qs-spectrum-site';
+
+  /* =================== Active tab =================== */
+  (function markActiveDemoTab() {
+    var t = document.querySelector('meta[name="active-tab"]');
+    if (!t) return;
+    var key = t.getAttribute('content');
+    document.querySelectorAll('.demo-tab[data-tab="' + key + '"]').forEach(function (el) {
+      el.classList.add('is-active');
+    });
+  })();
+  function loadSite() {
+    try {
+      const raw = localStorage.getItem(SITE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+  function clearSite() { try { localStorage.removeItem(SITE_KEY); } catch (e) {} }
+
+  const siteData = loadSite();
+  const cameFromWizard = new URLSearchParams(location.search).get('from') === 'wizard';
+
+  if (siteData) {
+    // update topbar "Site · Korat-NTH-02" → "Site · {deviceName}"
+    const label = document.getElementById('siteLabel');
+    if (label) label.textContent = `Site · ${siteData.deviceName || 'Untitled'}`;
+
+    // show welcome banner
+    if (cameFromWizard) {
+      const banner = document.getElementById('welcomeBanner');
+      if (banner) {
+        banner.innerHTML = `
+          <div class="welcome-banner" role="status">
+            <div class="welcome-banner-icon" aria-hidden="true">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div class="welcome-banner-body">
+              <div class="welcome-banner-title">Gateway enrolled — live monitoring active</div>
+              <div class="welcome-banner-text">
+                <code>${escapeHtml(siteData.deviceName || 'Gateway')}</code>
+                · ${escapeHtml(siteData.algorithm || 'kyber-768')} · key rotation every
+                ${escapeHtml(siteData.rotation || '30')} days · region
+                <code>${escapeHtml(siteData.region || 'ap-southeast-1')}</code>.
+                First sweep data should arrive in &lt; 30 s.
+              </div>
+            </div>
+          </div>
+        `;
+      }
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  /* =================== Product tour (Driver.js) =================== */
+  /* Driver.js is loaded from CDN with `defer`. window.driver.js.driver
+     exposes the Driver factory. See prototype/quantum-shield-demo.html
+     for the working pattern reference. */
+  const TOUR_KEY = 'qs-spectrum-tour-completed-v4';
+  const TOUR_START_DELAY_MS = 600;
+
+  function tourCompleted() {
+    try { return localStorage.getItem(TOUR_KEY) === '1'; } catch (e) { return false; }
+  }
+  function markTourCompleted() {
+    try { localStorage.setItem(TOUR_KEY, '1'); } catch (e) {}
+  }
+  function clearTourCompleted() {
+    try { localStorage.removeItem(TOUR_KEY); } catch (e) {}
+  }
+
+  function buildDriver() {
+    /* Driver.js 1.0.1 IIFE API (matches quantum-shield-demo.html):
+       - window.driver.js.driver  → class constructor
+       - instance.setSteps([...]) → define steps
+       - instance.drive()         → start the tour */
+    const Ctor = window.driver.js.driver;
+    const driverObj = new Ctor({
+      showProgress: true,
+      animate: true,
+      opacity: 0.55,
+      padding: 6,
+      allowClose: true,
+      onDestroyed: () => {
+        markTourCompleted();
+        const btn = document.getElementById('tourRestart');
+        if (btn) btn.hidden = false;
+      },
+    });
+
+    driverObj.setSteps([
+      {
+        element: 'main',
+        popover: {
+          title: 'Quick overview',
+          description: "You're looking at the <b>RF spectrum analyzer</b> for a PULSE site. We'll walk through 4 panels — filters, live spectrum, detections, alerts.<br><br>Click <b>Next</b> to begin, or <b>×</b> to skip.",
+          position: 'bottom',
+        },
+      },
+      {
+        element: '[data-tour-id="filters"]',
+        popover: {
+          title: 'Filters sidebar',
+          description: 'Toggle which <b>bands</b> and <b>threat types</b> appear in the chart and detections list. Blue-tinted chips are currently active. The search box lets you jump straight to a signal ID like <b>GPS-L1</b>.',
+          position: 'right',
+        },
+      },
+      {
+        element: '[data-tour-id="spectrum"]',
+        popover: {
+          title: 'Live spectrum chart',
+          description: 'The <b>blue line</b> shows signal power across frequency (800 MHz – 6 GHz). <b>Yellow bands</b> mark known RF allocations (LTE / GPS / Wi-Fi / 5G). Updates every 600 ms.<br><br>A spike outside a yellow band that persists > 3 sweeps is potentially a jammer.',
+          position: 'top',
+        },
+      },
+      {
+        element: '[data-tour-id="detections"]',
+        popover: {
+          title: 'Recent detections',
+          description: 'Each row is an anomaly the classifier fired on. <b>Dot colour = severity</b>: red → orange → blue → grey. Click any row to drill into the full spectrum capture and timeline.',
+          position: 'top',
+        },
+      },
+      {
+        element: '[data-tour-id="alerts"]',
+        popover: {
+          title: 'Live alerts feed',
+          description: 'Alerts stream in real time as the classifier runs. New alerts slide in from the top every ~12 s during the demo.<br><br><b>Critical</b> alerts page the on-call rotation via PagerDuty. You\'re done — have fun hunting jammers!',
+          position: 'left',
+        },
+      },
+    ]);
+
+    return driverObj;
+  }
+
+  function startTour() {
+    if (!window.driver || !window.driver.js || !window.driver.js.driver) {
+      // CDN failed — silently no-op (UX: prefer "no tour" over "broken")
+      console.warn('Driver.js not loaded — skipping tour.');
+      return;
+    }
+    buildDriver().drive();
+  }
+
+  // Auto-start the first time the page loads
+  function maybeStartTour() {
+    if (tourCompleted()) {
+      const btn = document.getElementById('tourRestart');
+      if (btn) btn.hidden = false;
+      return;
+    }
+    setTimeout(startTour, TOUR_START_DELAY_MS);
+  }
+  // If tour not completed yet, hide the restart button until auto-start kicks in
+  if (!tourCompleted()) {
+    document.getElementById('tourRestart').hidden = true;
+  } else {
+    document.getElementById('tourRestart').hidden = false;
+  }
+
+  // Manual restart trigger
+  const tourRestartBtn = document.getElementById('tourRestart');
+  if (tourRestartBtn) {
+    tourRestartBtn.addEventListener('click', () => {
+      clearTourCompleted();
+      startTour();
+    });
+  }
+
+  // Kick the auto-start once DOM scripts are ready (Driver.js defers loading)
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', maybeStartTour);
+  } else {
+    // give Driver.js a moment to fire its deferred parse
+    setTimeout(maybeStartTour, 0);
+  }
+
+  /* =================== KPI counters =================== */
+  function animateCounter(el, target, duration = 800) {
+    const start = performance.now();
+    const update = (now) => {
+      const t = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const value = target * eased;
+      if (Number.isInteger(target)) {
+        el.firstChild.nodeValue = Math.floor(value).toLocaleString();
+      } else {
+        el.firstChild.nodeValue = value.toFixed(1);
+      }
+      if (t < 1) requestAnimationFrame(update);
+      else {
+        if (Number.isInteger(target)) el.firstChild.nodeValue = Math.floor(target).toLocaleString();
+        else el.firstChild.nodeValue = target.toFixed(1);
+      }
+    };
+    requestAnimationFrame(update);
+  }
+
+  const counters = document.querySelectorAll('[data-counter]');
+  if ('IntersectionObserver' in window) {
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          animateCounter(e.target, parseFloat(e.target.dataset.counter));
+          io.unobserve(e.target);
+        }
+      });
+    }, { threshold: 0.4 });
+    counters.forEach(el => io.observe(el));
+  } else {
+    counters.forEach(el => { el.firstChild.nodeValue = el.dataset.counter; });
+  }
+
+  /* =================== Spectrum chart (SVG line redraw) =================== */
+  /* Generates a realistic-looking spectrum line with spikes on real bands.
+     Updates every 600ms by morphing the path "d" attribute. */
+  const W = 1000, H = 220, BASELINE = 200;
+  const bands = [
+    { name: 'LTE', from: 0.18, to: 0.28 },
+    { name: 'GPS', from: 0.28, to: 0.34 },
+    { name: 'Wi-Fi', from: 0.43, to: 0.71 },
+    { name: '5G', from: 0.78, to: 0.90 },
+  ];
+  const peaks = [
+    { freq: 0.22, amp: -55, width: 0.04 },  // LTE
+    { freq: 0.30, amp: -52, width: 0.03 },  // GPS
+    { freq: 0.50, amp: -45, width: 0.05 },  // Wi-Fi ch6
+    { freq: 0.62, amp: -58, width: 0.04 },  // Wi-Fi ch11
+    { freq: 0.85, amp: -50, width: 0.04 },  // 5G NR n78
+  ];
+
+  function gaussian(x, mu, sigma) {
+    return Math.exp(-((x - mu) ** 2) / (2 * sigma * sigma));
+  }
+
+  function generateSpectrum(t) {
+    // baseline noise
+    const pts = [];
+    for (let px = 0; px <= W; px += 10) {
+      const f = px / W;
+      let y = BASELINE - 8; // floor
+      // sum of peaks
+      for (const p of peaks) {
+        // slow phase shift makes peaks "breathe"
+        const mu = p.freq + 0.005 * Math.sin(t * 0.0008 + p.freq * 10);
+        const sigma = p.width;
+        y -= (BASELINE - 30 - p.amp) * 0.6 * gaussian(f, mu, sigma);
+      }
+      // small random walk for noise
+      y -= 4 * Math.sin(px * 0.04 + t * 0.001) + Math.random() * 2;
+      pts.push([px, Math.max(20, Math.min(BASELINE - 10, y))]);
+    }
+    return pts;
+  }
+
+  function pathForPoints(pts, baselineY) {
+    if (!pts.length) return '';
+    let d = `M ${pts[0][0]} ${pts[0][1]}`;
+    for (let i = 1; i < pts.length; i++) d += ` L ${pts[i][0]} ${pts[i][1]}`;
+    return d + ` L ${pts[pts.length - 1][0]} ${baselineY} L ${pts[0][0]} ${baselineY} Z`;
+  }
+
+  const lineEl = document.getElementById('spectrumLine');
+  const areaEl = document.getElementById('spectrumArea');
+
+  function updateSpectrum() {
+    if (!lineEl || !areaEl) return; // bail if chart markup not on this page variant
+    const t = performance.now();
+    const pts = generateSpectrum(t);
+    const lineD = `M ${pts[0][0]} ${pts[0][1]}` + pts.slice(1).map(p => ` L ${p[0]} ${p[1]}`).join('');
+    const areaD = lineD + ` L ${W} ${BASELINE} L 0 ${BASELINE} Z`;
+    lineEl.setAttribute('d', lineD);
+    areaEl.setAttribute('d', areaD);
+  }
+
+  updateSpectrum();
+  setInterval(updateSpectrum, 600);
+
+  /* =================== Chip toggles =================== */
+  document.querySelectorAll('.chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const pressed = chip.getAttribute('aria-pressed') === 'true';
+      chip.setAttribute('aria-pressed', String(!pressed));
+      chip.classList.toggle('is-active', !pressed);
+    });
+  });
+
+  /* =================== Inject a new alert every ~12 seconds (demo only) =================== */
+  const alertTemplates = [
+    { tag: 'critical', name: 'Spoofing attempt on Galileo E1', meta: 'Conf 92% · 1.575 GHz' },
+    { tag: 'high',     name: 'Rogue 5G NR gNB detected',      meta: 'Conf 86% · 3.5 GHz' },
+    { tag: 'medium',   name: 'LoRa uplink drift',             meta: 'Conf 71% · 868 MHz' },
+    { tag: 'low',      name: 'BLE chirp variation',          meta: 'Conf 60% · 2.4 GHz' },
+  ];
+
+  function nowLabel() {
+    const d = new Date();
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  }
+
+  function pushAlert() {
+    const list = document.getElementById('alertList');
+    if (!list) return;
+    const t = alertTemplates[Math.floor(Math.random() * alertTemplates.length)];
+    const el = document.createElement('article');
+    el.className = 'alert';
+    el.innerHTML = `
+      <div class="alert-head">
+        <span class="alert-tag ${t.tag}">${t.tag}</span>
+        <span class="alert-time">${nowLabel()}</span>
+      </div>
+      <div class="alert-name">${t.name}</div>
+      <div class="alert-meta">${t.meta}</div>
+    `;
+    list.insertBefore(el, list.firstChild);
+    while (list.children.length > 8) list.removeChild(list.lastChild);
+  }
+
+  // first demo alert after 6s, then every 12s
+  setTimeout(pushAlert, 6000);
+  setInterval(pushAlert, 12000);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,1947 @@
+<!--
+  UX/UI Design Brief — PULSE Onboarding Wizard (v2)
+  ============================================================
+  understanding:
+    user: first-time security admin / embedded dev setting up PULSE.
+          pain point: empty forms feel overwhelming and discourage completion.
+    primary_task: complete 4-step device setup without dropping off.
+    constraints: single-file HTML, no build, demo-mode pre-fills valid values,
+                 layout matches landing (max 880px, #5b8def accent, Inter).
+    success: complete all steps without backtracking, see realistic success screen.
+
+  visual_direction:
+    accent:    #5b8def (matches landing/dashboard family).
+    font:      Inter (sans), single family, single weight scale 400/500/600.
+    mood:      calm / guided / spacious — feels like a tour, not a form.
+    reference: stripe.com 3-step checkout clarity, linear.app airy sections,
+               apple.com macOS onboarding tooltips.
+    explicitly_avoid: dense label stacks, hard borders everywhere, "form-like"
+                      density, gates that lock the user out before they understand why.
+
+  improvements vs v1:
+    - pre-filled demo values (apiKey qsk_+32 chars, endpoint https URL).
+    - terms checkbox pre-checked in demo mode so Deploy is clickable immediately.
+    - tour-mode banner at top (dismissable) explaining the 4 steps at a glance.
+    - inline tour tip on every step (right-side note, accent-soft background).
+    - layout widened to 880px; spacing scale increased from 4 to 5 (4-8-12-16-24-40-64).
+    - softer palette (lighter borders, larger radii, fewer hard borders).
+    - progress shown as numbered circles (not pills) with step names underneath.
+    - success screen auto-plays after Deploy.
+
+  animations (every one has a purpose):
+    - step transition: fade-up 320ms ease-out, tells user "we moved".
+    - input focus: ring 180ms + label shift, clear focus state.
+    - validation success: checkmark scale 200ms ease-out, positive feedback.
+    - validation error: shake 240ms ease-in, gentle alarm.
+    - progress fill: 360ms ease-out, motivates finishing.
+    - success checkmark stroke draw 500ms ease-out (one shot, not looping).
+    - tip card: fade-in when entering step (320ms), reduces dead air.
+
+  tech:
+    - localStorage saves state at every change (refresh-safe).
+    - demo-mode toggle in topbar remembers user's choice.
+    - prefers-reduced-motion: slide → instant fade; shake → none; progress → instant.
+    - only transform + opacity animated (plus width on progress fill).
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light" />
+<title>Set up PULSE</title>
+<meta name="active-tab" content="wizard" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+<style>
+  /* ---------- Tokens ---------- */
+  :root {
+    /* palette — softer, fewer borders, more whitespace */
+    --color-bg:        #fbfcfe;          /* page bg, slight blue tint */
+    --color-bg-tinted: #f4f7fc;          /* panel/tour surface */
+    --color-surface:   #ffffff;
+    --color-border:    #e8edf5;          /* lighter border */
+    --color-border-2:  #dde5f0;          /* stronger border, rarely used */
+    --color-text:      #0f172a;
+    --color-text-2:    #334155;
+    --color-text-mute: #64748b;
+    --color-text-faint:#94a3b8;
+
+    --color-accent:        #5b8def;
+    --color-accent-hover:  #4a7be0;
+    --color-accent-soft:   #eaf1ff;
+    --color-accent-soft-2: #dde8ff;
+    --color-accent-ink:    #1e3a8a;
+
+    --color-success:    #16a34a;
+    --color-success-soft:#dcfce7;
+    --color-warn:       #d97706;
+    --color-warn-soft:  #fef3c7;
+    --color-danger:     #dc2626;
+    --color-danger-soft:#fee2e2;
+
+    /* spacing scale 4/8/12/16/24/40/64 */
+    --s-1: 4px; --s-2: 8px; --s-3: 12px; --s-4: 16px;
+    --s-5: 24px; --s-6: 40px; --s-7: 64px;
+
+    --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px; --radius-xl: 24px;
+    --radius-full: 9999px;
+
+    --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+    --shadow-sm: 0 2px 8px rgba(15, 23, 42, 0.05);
+    --shadow-md: 0 8px 28px rgba(15, 23, 42, 0.06);
+    --shadow-lg: 0 20px 60px rgba(15, 23, 42, 0.08);
+
+    --duration-micro:  150ms;
+    --duration-small:  240ms;
+    --duration-medium: 320ms;
+
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-in:  cubic-bezier(0.4, 0, 1, 1);
+
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+
+    --container-max: 880px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.55;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Page subtle background — soft radial anchor behind header (no AI gradient soup) */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(1200px 480px at 50% -120px, var(--color-accent-soft) 0%, transparent 60%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* skip link */
+  .skip-link {
+    position: absolute;
+    top: -40px;
+    left: var(--s-4);
+    background: var(--color-text);
+    color: white;
+    padding: var(--s-2) var(--s-4);
+    border-radius: var(--radius-sm);
+    text-decoration: none;
+    z-index: 100;
+    transition: top var(--duration-micro) var(--ease-out);
+  }
+  .skip-link:focus { top: var(--s-4); }
+
+  /* ---------- Demo-switcher nav (shared across all 3 demos) ---------- */
+  .demo-nav {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: saturate(180%) blur(12px);
+    -webkit-backdrop-filter: saturate(180%) blur(12px);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .demo-nav-inner {
+    max-width: var(--container-max);
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-5);
+    padding: 0 var(--s-6);
+    height: 56px;
+  }
+  .demo-nav-brand {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    text-decoration: none;
+    color: var(--color-text);
+    font-weight: 600;
+    font-size: 15px;
+    flex-shrink: 0;
+  }
+  .demo-nav-brand-mark {
+    width: 28px; height: 28px;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(135deg, var(--color-accent), #8b5cf6);
+    display: grid; place-items: center;
+    color: white;
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .demo-nav-brand-name { letter-spacing: -0.01em; }
+  .demo-nav-tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+    justify-content: center;
+  }
+  .demo-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: var(--radius-full);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text-mute);
+    text-decoration: none;
+    transition: background var(--duration-micro) var(--ease-out),
+                color var(--duration-micro) var(--ease-out);
+    white-space: nowrap;
+  }
+  .demo-tab:hover {
+    background: var(--color-bg-tinted);
+    color: var(--color-text);
+  }
+  .demo-tab.is-active {
+    background: var(--color-accent-soft);
+    color: var(--color-accent-ink);
+    font-weight: 600;
+  }
+  .demo-tab:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  .demo-tab svg {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+  }
+  @media (max-width: 720px) {
+    .demo-nav-inner { gap: var(--s-3); padding: 0 var(--s-4); }
+    .demo-nav-brand-name { display: none; }
+    .demo-tab { padding: 6px 10px; }
+  }
+
+  /* ---------- Top bar ---------- */
+  .topbar {
+    background: transparent;
+    padding: var(--s-4) var(--s-6);
+    position: relative;
+    z-index: 1;
+  }
+  .topbar-inner {
+    max-width: var(--container-max);
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-4);
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    color: var(--color-text);
+    text-decoration: none;
+    font-weight: 600;
+    font-size: 15px;
+  }
+  .brand-mark {
+    width: 28px; height: 28px;
+    border-radius: var(--radius-sm);
+    background: linear-gradient(135deg, var(--color-accent), #8b5cf6);
+    display: grid; place-items: center;
+    color: white;
+    font-weight: 700;
+    font-size: 14px;
+  }
+  .breadcrumb-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-mute);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    transition: background var(--duration-micro) var(--ease-out),
+                color var(--duration-micro) var(--ease-out);
+  }
+  .breadcrumb-back:hover {
+    background: var(--color-bg-tinted);
+    color: var(--color-accent);
+  }
+  .breadcrumb-back:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  .topbar-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--s-4);
+    font-size: 14px;
+    color: var(--color-text-mute);
+  }
+  .demo-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s-2);
+    height: 36px;
+    padding: 0 var(--s-4);
+    border-radius: var(--radius-full);
+    background: var(--color-warn-soft);
+    border: 1px solid #fde68a;
+    color: #92400e;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition:
+      background var(--duration-micro) var(--ease-out),
+      border-color var(--duration-micro) var(--ease-out),
+      transform 120ms var(--ease-out);
+  }
+  .demo-toggle:hover { background: #fef9c3; border-color: #fcd34d; }
+  .demo-toggle:active { transform: scale(0.97); }
+  .demo-toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .demo-toggle-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: currentColor;
+  }
+
+  /* ---------- Layout ---------- */
+  .main {
+    padding: var(--s-4) var(--s-4) var(--s-7);
+    position: relative;
+    z-index: 1;
+  }
+  .shell {
+    max-width: var(--container-max);
+    margin: 0 auto;
+  }
+
+  /* ---------- Welcome header (above progress) ---------- */
+  .welcome {
+    margin-bottom: var(--s-5);
+  }
+  .welcome h1 {
+    margin: 0 0 var(--s-2);
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1.25;
+  }
+  .welcome p {
+    margin: 0;
+    color: var(--color-text-mute);
+    font-size: 16px;
+    max-width: 60ch;
+  }
+
+  /* ---------- Progress (numbered circles) ---------- */
+  .progress {
+    margin-bottom: var(--s-6);
+  }
+  .progress-track {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--s-3);
+    position: relative;
+  }
+  /* connecting line */
+  .progress-track::before {
+    content: '';
+    position: absolute;
+    top: 18px;
+    left: 18px;
+    right: 18px;
+    height: 2px;
+    background: var(--color-border);
+    z-index: 0;
+  }
+  .progress-fill-line {
+    position: absolute;
+    top: 18px;
+    left: 18px;
+    height: 2px;
+    width: 0;
+    background: var(--color-accent);
+    z-index: 1;
+    transition: width var(--duration-medium) var(--ease-out);
+  }
+  .step-node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--s-3);
+    position: relative;
+    z-index: 2;
+  }
+  .step-node-circle {
+    width: 36px; height: 36px;
+    border-radius: 50%;
+    background: var(--color-surface);
+    border: 2px solid var(--color-border-2);
+    display: grid; place-items: center;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--color-text-mute);
+    transition:
+      background var(--duration-small) var(--ease-out),
+      border-color var(--duration-small) var(--ease-out),
+      color var(--duration-small) var(--ease-out),
+      transform var(--duration-small) var(--ease-out);
+  }
+  .step-node.is-active .step-node-circle {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+    color: white;
+    transform: scale(1.05);
+  }
+  .step-node.is-done .step-node-circle {
+    background: var(--color-success);
+    border-color: var(--color-success);
+    color: white;
+  }
+  .step-node-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--color-text-mute);
+    text-align: center;
+    line-height: 1.3;
+  }
+  .step-node.is-active .step-node-label { color: var(--color-text); }
+
+  /* ---------- Tour banner (dismissable) ---------- */
+  .tour-banner {
+    background: var(--color-accent-soft);
+    border: 1px solid var(--color-accent-soft-2);
+    border-radius: var(--radius-lg);
+    padding: var(--s-4) var(--s-5);
+    margin-bottom: var(--s-5);
+    display: flex;
+    align-items: flex-start;
+    gap: var(--s-3);
+    animation: tour-in 360ms var(--ease-out);
+  }
+  @keyframes tour-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .tour-banner.is-hidden { display: none; }
+  .tour-banner-icon {
+    flex-shrink: 0;
+    width: 32px; height: 32px;
+    border-radius: var(--radius-sm);
+    background: var(--color-accent);
+    color: white;
+    display: grid; place-items: center;
+    margin-top: 2px;
+  }
+  .tour-banner-body { flex: 1; }
+  .tour-banner-title {
+    font-weight: 600;
+    color: var(--color-accent-ink);
+    font-size: 14px;
+    margin-bottom: 2px;
+  }
+  .tour-banner-text {
+    color: var(--color-accent-ink);
+    font-size: 13px;
+    line-height: 1.5;
+    opacity: 0.85;
+  }
+  .tour-banner-close {
+    flex-shrink: 0;
+    width: 28px; height: 28px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    border: none;
+    color: var(--color-accent-ink);
+    cursor: pointer;
+    display: grid; place-items: center;
+    opacity: 0.6;
+    transition: opacity var(--duration-micro) var(--ease-out), background var(--duration-micro) var(--ease-out);
+  }
+  .tour-banner-close:hover { opacity: 1; background: rgba(30, 58, 138, 0.08); }
+  .tour-banner-close:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+  /* ---------- Card ---------- */
+  .card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-md);
+    overflow: hidden;
+    position: relative;
+  }
+  .card::before {
+    /* subtle accent strip on the left, nothing flashy */
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--color-accent);
+    opacity: 0.6;
+  }
+  .card-body {
+    padding: var(--s-6) var(--s-6) var(--s-5);
+  }
+  @media (max-width: 720px) {
+    .card-body { padding: var(--s-5) var(--s-4) var(--s-4); }
+    .main { padding: var(--s-3) var(--s-3) var(--s-6); }
+    .progress-track { gap: var(--s-2); }
+    .step-node-label { font-size: 11px; }
+    .tour-banner { padding: var(--s-3) var(--s-4); }
+  }
+
+  /* ---------- Step transition ---------- */
+  .step { display: none; }
+  .step.is-active {
+    display: grid;
+    grid-template-columns: 1fr 240px;
+    gap: var(--s-6);
+    align-items: start;
+    animation: step-in var(--duration-medium) var(--ease-out) both;
+  }
+  @media (max-width: 720px) {
+    .step.is-active {
+      grid-template-columns: 1fr;
+      gap: var(--s-5);
+    }
+  }
+  @keyframes step-in {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .step-main { min-width: 0; }
+  .step-aside { min-width: 0; }
+
+  .step-heading {
+    margin: 0 0 var(--s-3);
+    font-size: 22px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.3;
+  }
+  .step-sub {
+    margin: 0 0 var(--s-5);
+    color: var(--color-text-mute);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  /* ---------- Step aside (tour tip card) ---------- */
+  .tip-card {
+    background: var(--color-bg-tinted);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: var(--s-4);
+    position: relative;
+    animation: tip-in 380ms var(--ease-out) 60ms both;
+  }
+  @keyframes tip-in {
+    from { opacity: 0; transform: translateX(8px); }
+    to   { opacity: 1; transform: translateX(0); }
+  }
+  .tip-card-icon {
+    width: 28px; height: 28px;
+    border-radius: var(--radius-sm);
+    background: var(--color-accent-soft);
+    color: var(--color-accent);
+    display: grid; place-items: center;
+    margin-bottom: var(--s-3);
+  }
+  .tip-card-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-text);
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .tip-card-body {
+    font-size: 13px;
+    color: var(--color-text-2);
+    line-height: 1.55;
+  }
+  .tip-card-body strong {
+    color: var(--color-text);
+    font-weight: 600;
+  }
+  .tip-card-list {
+    margin: var(--s-3) 0 0;
+    padding-left: var(--s-4);
+    list-style: none;
+    counter-reset: tip;
+  }
+  .tip-card-list li {
+    counter-increment: tip;
+    margin-bottom: var(--s-2);
+    position: relative;
+    padding-left: var(--s-4);
+  }
+  .tip-card-list li::before {
+    content: counter(tip);
+    position: absolute;
+    left: 0;
+    top: 1px;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--color-accent-soft);
+    color: var(--color-accent-ink);
+    font-size: 11px;
+    font-weight: 600;
+    display: grid; place-items: center;
+  }
+  .tip-card-list b { font-weight: 600; color: var(--color-text); }
+
+  /* ---------- Step 1: device cards ---------- */
+  .choice-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--s-3);
+  }
+  @media (max-width: 720px) { .choice-grid { grid-template-columns: 1fr; } }
+
+  .choice {
+    position: relative;
+    background: var(--color-surface);
+    border: 1.5px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: var(--s-4);
+    cursor: pointer;
+    text-align: left;
+    transition:
+      transform var(--duration-small) var(--ease-out),
+      border-color var(--duration-micro) var(--ease-out),
+      background var(--duration-micro) var(--ease-out),
+      box-shadow var(--duration-micro) var(--ease-out);
+    font-family: inherit;
+    font-size: 14px;
+    color: inherit;
+  }
+  .choice:hover {
+    border-color: var(--color-border-2);
+    background: var(--color-bg-tinted);
+  }
+  .choice:active { transform: scale(0.98); }
+  .choice:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .choice.is-selected {
+    border-color: var(--color-accent);
+    background: var(--color-accent-soft);
+    box-shadow: 0 0 0 3px rgba(91, 141, 239, 0.15);
+  }
+  .choice-icon {
+    width: 36px; height: 36px;
+    border-radius: var(--radius-md);
+    background: var(--color-bg-tinted);
+    display: grid; place-items: center;
+    color: var(--color-accent);
+    margin-bottom: var(--s-3);
+    transition: background var(--duration-micro) var(--ease-out), color var(--duration-micro) var(--ease-out);
+  }
+  .choice.is-selected .choice-icon {
+    background: var(--color-accent);
+    color: white;
+  }
+  .choice-title {
+    display: block;
+    font-weight: 600;
+    color: var(--color-text);
+    margin-bottom: 4px;
+    font-size: 15px;
+  }
+  .choice-desc {
+    display: block;
+    color: var(--color-text-mute);
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .choice-check {
+    position: absolute;
+    top: var(--s-3);
+    right: var(--s-3);
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: var(--color-success);
+    color: white;
+    display: grid; place-items: center;
+    opacity: 0;
+    transform: scale(0.6);
+    transition:
+      opacity var(--duration-micro) var(--ease-out),
+      transform var(--duration-small) var(--ease-out);
+  }
+  .choice.is-selected .choice-check { opacity: 1; transform: scale(1); }
+
+  /* ---------- Form fields ---------- */
+  .field { margin-bottom: var(--s-5); }
+  .field:last-child { margin-bottom: 0; }
+  .field-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--s-4);
+  }
+  @media (max-width: 720px) { .field-row { grid-template-columns: 1fr; } }
+
+  .label {
+    display: block;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--color-text);
+    margin-bottom: var(--s-2);
+  }
+  .label-optional {
+    color: var(--color-text-faint);
+    font-weight: 400;
+    margin-left: var(--s-2);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .input-wrap { position: relative; }
+  .input,
+  .select {
+    width: 100%;
+    padding: 11px 14px;
+    border: 1.5px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    color: var(--color-text);
+    font: inherit;
+    font-size: 15px;
+    line-height: 1.4;
+    transition:
+      border-color var(--duration-micro) var(--ease-out),
+      box-shadow var(--duration-micro) var(--ease-out);
+  }
+  .input::placeholder { color: var(--color-text-faint); }
+  .input:hover:not(:focus):not(.is-error):not(:disabled) {
+    border-color: var(--color-border-2);
+  }
+  .input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px rgba(91, 141, 239, 0.18);
+  }
+  .input:disabled { background: var(--color-bg-tinted); color: var(--color-text-faint); cursor: not-allowed; }
+  .input.is-valid { border-color: var(--color-success); padding-right: 40px; }
+  .input.is-error {
+    border-color: var(--color-danger);
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+  }
+  .input.is-shaking { animation: shake var(--duration-small) var(--ease-in); }
+  @keyframes shake {
+    0%   { transform: translateX(0); }
+    25%  { transform: translateX(-4px); }
+    50%  { transform: translateX(4px); }
+    75%  { transform: translateX(-2px); }
+    100% { transform: translateX(0); }
+  }
+
+  .input-status {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--duration-small) var(--ease-out);
+  }
+  .input.is-valid ~ .input-status { opacity: 1; }
+
+  .helper {
+    margin: var(--s-2) 0 0;
+    font-size: 13px;
+    color: var(--color-text-mute);
+    line-height: 1.5;
+  }
+  .helper.is-error {
+    color: var(--color-danger);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .select { appearance: none; -webkit-appearance: none; padding-right: 36px; cursor: pointer; }
+  .select-wrap { position: relative; }
+  .select-wrap::after {
+    content: '';
+    position: absolute;
+    right: 14px; top: 50%;
+    width: 8px; height: 8px;
+    border-right: 1.5px solid var(--color-text-mute);
+    border-bottom: 1.5px solid var(--color-text-mute);
+    transform: translateY(-70%) rotate(45deg);
+    pointer-events: none;
+  }
+
+  /* ---------- Radio cards ---------- */
+  .radio-group { display: flex; flex-direction: column; gap: var(--s-2); }
+  .radio {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--s-3);
+    padding: var(--s-4);
+    border: 1.5px solid var(--color-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition:
+      border-color var(--duration-micro) var(--ease-out),
+      background var(--duration-micro) var(--ease-out);
+  }
+  .radio:hover {
+    border-color: var(--color-border-2);
+    background: var(--color-bg-tinted);
+  }
+  .radio input { position: absolute; opacity: 0; pointer-events: none; }
+  .radio-mark {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    border: 2px solid var(--color-border-2);
+    flex-shrink: 0;
+    margin-top: 2px;
+    display: grid; place-items: center;
+    transition: border-color var(--duration-micro) var(--ease-out);
+  }
+  .radio-mark::after {
+    content: '';
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--color-accent);
+    transform: scale(0);
+    transition: transform var(--duration-small) var(--ease-out);
+  }
+  .radio.is-checked {
+    border-color: var(--color-accent);
+    background: var(--color-accent-soft);
+  }
+  .radio.is-checked .radio-mark { border-color: var(--color-accent); }
+  .radio.is-checked .radio-mark::after { transform: scale(1); }
+  .radio:focus-within { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+  .radio-label { flex: 1; }
+  .radio-title {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--color-text);
+  }
+  .radio-rec {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--color-success);
+    background: var(--color-success-soft);
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .radio-desc {
+    display: block;
+    margin-top: 2px;
+    color: var(--color-text-mute);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .radio-meta {
+    font-size: 12px;
+    font-family: ui-monospace, 'JetBrains Mono', monospace;
+    color: var(--color-text-faint);
+    margin-top: 4px;
+  }
+
+  .radio-group + .radio-group { margin-top: var(--s-5); }
+  .radio-group-label {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--color-text);
+    margin-bottom: var(--s-3);
+  }
+
+  /* ---------- Confirm step ---------- */
+  .summary {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background: var(--color-bg-tinted);
+    margin-bottom: var(--s-4);
+  }
+  .summary-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: var(--s-3) var(--s-4);
+    border-bottom: 1px solid var(--color-border);
+    gap: var(--s-4);
+  }
+  .summary-row:last-child { border-bottom: none; }
+  .summary-key { color: var(--color-text-mute); font-size: 14px; }
+  .summary-value {
+    color: var(--color-text);
+    font-size: 14px;
+    font-weight: 500;
+    text-align: right;
+    word-break: break-word;
+  }
+  .summary-value code {
+    font-family: ui-monospace, 'JetBrains Mono', monospace;
+    font-size: 12px;
+    background: var(--color-surface);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  .checkbox {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--s-3);
+    cursor: pointer;
+    padding: var(--s-3);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-tinted);
+  }
+  .checkbox input { position: absolute; opacity: 0; pointer-events: none; }
+  .checkbox-box {
+    width: 20px; height: 20px;
+    border: 1.5px solid var(--color-border-2);
+    border-radius: 5px;
+    flex-shrink: 0;
+    display: grid; place-items: center;
+    transition:
+      border-color var(--duration-micro) var(--ease-out),
+      background var(--duration-micro) var(--ease-out);
+    margin-top: 2px;
+    background: var(--color-surface);
+  }
+  .checkbox-box svg { opacity: 0; transition: opacity var(--duration-small) var(--ease-out); }
+  .checkbox input:checked ~ .checkbox-box {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+  .checkbox input:checked ~ .checkbox-box svg { opacity: 1; }
+  .checkbox input:focus-visible ~ .checkbox-box {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  .checkbox-text { font-size: 14px; color: var(--color-text); line-height: 1.55; }
+  .checkbox-text a {
+    color: var(--color-accent-ink);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  /* ---------- Footer nav ---------- */
+  .footer {
+    background: var(--color-bg-tinted);
+    padding: var(--s-4) var(--s-6);
+    border-top: 1px solid var(--color-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--s-3);
+  }
+  @media (max-width: 720px) {
+    .footer { padding: var(--s-3) var(--s-4); flex-wrap: wrap; }
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--s-2);
+    min-height: 44px;
+    padding: 0 var(--s-5);
+    border-radius: var(--radius-md);
+    border: 1.5px solid transparent;
+    font: inherit;
+    font-size: 15px;
+    font-weight: 500;
+    cursor: pointer;
+    transition:
+      background var(--duration-micro) var(--ease-out),
+      border-color var(--duration-micro) var(--ease-out),
+      transform 120ms var(--ease-out),
+      opacity var(--duration-micro) var(--ease-out);
+    text-decoration: none;
+    color: inherit;
+    line-height: 1;
+  }
+  .btn:active:not(:disabled) { transform: scale(0.97); }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+  .btn-primary {
+    background: var(--color-accent);
+    color: white;
+    border-color: var(--color-accent);
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: var(--color-accent-hover);
+    border-color: var(--color-accent-hover);
+  }
+  .btn-secondary {
+    background: var(--color-surface);
+    color: var(--color-text);
+    border-color: var(--color-border-2);
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--color-bg-tinted);
+    border-color: var(--color-text-faint);
+  }
+  .btn-ghost {
+    background: transparent;
+    color: var(--color-text-mute);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    color: var(--color-text);
+    background: var(--color-bg-tinted);
+  }
+
+  .spinner {
+    width: 16px; height: 16px;
+    border: 2px solid currentColor;
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- Success ---------- */
+  .success {
+    text-align: center;
+    padding: var(--s-7) var(--s-5);
+    animation: step-in 360ms var(--ease-out);
+  }
+  .success-icon {
+    width: 72px; height: 72px;
+    border-radius: 50%;
+    background: var(--color-success-soft);
+    color: var(--color-success);
+    display: grid; place-items: center;
+    margin: 0 auto var(--s-5);
+  }
+  .success-icon .check-path {
+    stroke-dasharray: 24;
+    stroke-dashoffset: 24;
+    animation: draw 500ms var(--ease-out) 200ms forwards;
+  }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+
+  .success h2 {
+    margin: 0 0 var(--s-3);
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .success p {
+    margin: 0 0 var(--s-5);
+    color: var(--color-text-mute);
+    max-width: 50ch;
+    margin-left: auto; margin-right: auto;
+  }
+  .success-actions {
+    display: flex;
+    gap: var(--s-3);
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+  .success-meta {
+    margin-top: var(--s-5);
+    font-size: 13px;
+    color: var(--color-text-faint);
+  }
+
+  /* ---------- Reduced motion ---------- */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+</style>
+</head>
+<body>
+<a href="#main" class="skip-link">Skip to main content</a>
+
+<header class="demo-nav" id="demoNav" role="banner">
+  <div class="demo-nav-inner">
+    <a class="demo-nav-brand" href="./landing-demo.html?from=demo-nav">
+      <span class="demo-nav-brand-mark" aria-hidden="true">P</span>
+      <span class="demo-nav-brand-name">PULSE</span>
+    </a>
+    <nav class="demo-nav-tabs" aria-label="Demo pages">
+      <a class="demo-tab" href="./landing-demo.html?from=demo-nav" data-tab="overview">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span>Overview</span>
+      </a>
+      <a class="demo-tab" href="./onboarding-wizard.html?from=demo-nav" data-tab="wizard">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>Setup</span>
+      </a>
+      <a class="demo-tab" href="./spectrum-analyzer.html?from=demo-nav" data-tab="analyzer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 18l4-6 4 6 4-12 4 12 2-4"/></svg>
+        <span>Live dashboard</span>
+      </a>
+    </nav>
+    <div class="demo-nav-meta" aria-hidden="true"></div>
+  </div>
+</header>
+
+<div class="topbar" role="banner">
+  <div class="topbar-inner">
+    <a href="./landing-demo.html?from=wizard" class="breadcrumb-back" aria-label="Back to landing page">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      PULSE
+    </a>
+    <a href="#" class="brand" aria-label="PULSE home">
+      <span class="brand-mark" aria-hidden="true">P</span>
+      <span>PULSE</span>
+    </a>
+    <div class="topbar-meta">
+      <a href="mailto:support@quantum-shield.example" style="color:var(--color-text-2);text-decoration:none;">Need help?</a>
+      <button type="button" class="demo-toggle" id="demoToggle" aria-pressed="true">
+        <span class="demo-toggle-dot" aria-hidden="true"></span>
+        Demo mode · sample data
+      </button>
+    </div>
+  </div>
+</div>
+
+<main id="main" class="main">
+  <div class="shell">
+
+    <div class="welcome">
+      <h1>Set up your first device</h1>
+      <p>Four short steps. Most teams finish in under two minutes. You can edit any choice later from the device page.</p>
+    </div>
+
+    <div class="tour-banner" id="tourBanner" role="region" aria-label="Tour overview">
+      <div class="tour-banner-icon" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+      </div>
+      <div class="tour-banner-body">
+        <div class="tour-banner-title">Your setup, at a glance</div>
+        <div class="tour-banner-text">Each step shows a tip card on the right explaining what you'll do and why. Skim the orange banner above to know what's coming next.</div>
+      </div>
+      <button type="button" class="tour-banner-close" id="tourClose" aria-label="Dismiss tour tip">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="6" y1="18" x2="18" y2="6"/></svg>
+      </button>
+    </div>
+
+    <div class="progress" aria-label="Setup progress">
+      <div class="progress-track" id="progressTrack">
+        <span class="progress-fill-line" id="progressLine" style="width:0"></span>
+        <div class="step-node" data-node="1">
+          <div class="step-node-circle">1</div>
+          <div class="step-node-label">Pick device</div>
+        </div>
+        <div class="step-node" data-node="2">
+          <div class="step-node-circle">2</div>
+          <div class="step-node-label">Connect</div>
+        </div>
+        <div class="step-node" data-node="3">
+          <div class="step-node-circle">3</div>
+          <div class="step-node-label">Choose keys</div>
+        </div>
+        <div class="step-node" data-node="4">
+          <div class="step-node-circle">4</div>
+          <div class="step-node-label">Review</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="cardRoot">
+      <!-- ============ STEP 1: Welcome / device type ============ -->
+      <section class="step is-active" data-step="1" aria-labelledby="step1-title">
+        <div class="card-body step-main">
+          <h2 class="step-heading" id="step1-title">What are you enrolling today?</h2>
+          <p class="step-sub">Pick the device that best matches your hardware. We'll tailor the SDK and key policy.</p>
+
+          <div class="choice-grid" role="radiogroup" aria-labelledby="step1-title">
+            <button type="button" class="choice" role="radio" aria-checked="false" data-choice="gateway" data-name="Edge gateway">
+              <span class="choice-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><circle cx="7" cy="7" r="0.8" fill="currentColor"/><circle cx="7" cy="17" r="0.8" fill="currentColor"/></svg>
+              </span>
+              <span class="choice-title">Edge gateway</span>
+              <span class="choice-desc">Linux gateway with full SDK and HTTP API.</span>
+              <span class="choice-check" aria-hidden="true">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 12 10 17 19 7"/></svg>
+              </span>
+            </button>
+
+            <button type="button" class="choice" role="radio" aria-checked="false" data-choice="sensor" data-name="Edge sensor">
+              <span class="choice-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12c0-4 4-7 8-7s8 3 8 7-4 7-8 7-8-3-8-7z"/><circle cx="12" cy="12" r="2.5"/></svg>
+              </span>
+              <span class="choice-title">Edge sensor</span>
+              <span class="choice-desc">Battery-powered Cortex-M, OTA-ready.</span>
+              <span class="choice-check" aria-hidden="true">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 12 10 17 19 7"/></svg>
+              </span>
+            </button>
+
+            <button type="button" class="choice" role="radio" aria-checked="false" data-choice="mobile" data-name="Mobile client">
+              <span class="choice-icon" aria-hidden="true">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="7" y="3" width="10" height="18" rx="2"/><line x1="11" y1="18" x2="13" y2="18"/></svg>
+              </span>
+              <span class="choice-title">Mobile client</span>
+              <span class="choice-desc">iOS / Android with biometric unlock.</span>
+              <span class="choice-check" aria-hidden="true">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 12 10 17 19 7"/></svg>
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <aside class="step-aside" aria-label="Step 1 tip">
+          <div class="tip-card">
+            <div class="tip-card-icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </div>
+            <div class="tip-card-title">What this does</div>
+            <div class="tip-card-body">
+              <p style="margin:0 0 var(--s-3)">Binds a <strong>device profile</strong> to your certificate, so future keys rotate automatically.</p>
+              <p style="margin:0">Not sure? Most teams start with <strong>Edge gateway</strong> and add others later.</p>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <div class="footer" data-step-footer="1">
+        <span></span>
+        <div style="display:flex; gap:var(--s-3); align-items:center;">
+          <button type="button" class="btn btn-ghost" data-action="next">Skip</button>
+          <button type="button" class="btn btn-primary" data-action="next" disabled>
+            Continue
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <!-- ============ STEP 2: Credentials ============ -->
+      <section class="step" data-step="2" aria-labelledby="step2-title">
+        <div class="card-body step-main">
+          <h2 class="step-heading" id="step2-title">Connect to PULSE</h2>
+          <p class="step-sub">Sample credentials are pre-filled so you can run the flow end-to-end. Replace with your real key when you're ready to ship.</p>
+
+          <div class="field">
+            <label class="label" for="apiKey">API key</label>
+            <div class="input-wrap">
+              <input
+                class="input"
+                type="text"
+                id="apiKey"
+                name="apiKey"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="qsk_…"
+                data-validate="apiKey" />
+              <span class="input-status" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-success)"><polyline points="5 12 10 17 19 7"/></svg>
+              </span>
+            </div>
+            <p class="helper" id="apiKey-helper">Looks like <code style="font-family:ui-monospace,monospace;font-size:13px;background:var(--color-bg-tinted);padding:1px 5px;border-radius:4px;">qsk_</code> followed by 32 characters.</p>
+          </div>
+
+          <div class="field">
+            <label class="label" for="endpoint">Endpoint URL</label>
+            <div class="input-wrap">
+              <input
+                class="input"
+                type="url"
+                id="endpoint"
+                name="endpoint"
+                autocomplete="url"
+                placeholder="https://api.example.com"
+                data-validate="endpoint" />
+              <span class="input-status" aria-hidden="true">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="color:var(--color-success)"><polyline points="5 12 10 17 19 7"/></svg>
+              </span>
+            </div>
+            <p class="helper" id="endpoint-helper">Use HTTPS. You can change this before deployment.</p>
+          </div>
+
+          <div class="field">
+            <label class="label" for="region">
+              Region
+              <span class="label-optional">Optional</span>
+            </label>
+            <div class="select-wrap">
+              <select class="select" id="region" name="region">
+                <option value="ap-southeast-1">Asia Pacific · Singapore</option>
+                <option value="ap-northeast-1">Asia Pacific · Tokyo</option>
+                <option value="eu-west-1">Europe · Ireland</option>
+                <option value="us-east-1">United States · N. Virginia</option>
+                <option value="us-west-2">United States · Oregon</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <aside class="step-aside" aria-label="Step 2 tip">
+          <div class="tip-card">
+            <div class="tip-card-icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/></svg>
+            </div>
+            <div class="tip-card-title">Where to find these</div>
+            <div class="tip-card-body">
+              <ol class="tip-card-list">
+                <li>Open the <b>PULSE dashboard</b></li>
+                <li>Go to <b>Settings → API keys</b></li>
+                <li>Click <b>"Generate key"</b> and copy the qsk_ value</li>
+                <li>Paste it here. We never store it on the server in plain text</li>
+              </ol>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <div class="footer" data-step-footer="2">
+        <button type="button" class="btn btn-secondary" data-action="back">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+          Back
+        </button>
+        <button type="button" class="btn btn-primary" data-action="next">
+          Continue
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        </button>
+      </div>
+
+      <!-- ============ STEP 3: Key policy ============ -->
+      <section class="step" data-step="3" aria-labelledby="step3-title">
+        <div class="card-body step-main">
+          <h2 class="step-heading" id="step3-title">Set your key policy</h2>
+          <p class="step-sub">Defaults work for most teams. Tune if your threat model needs higher margin or faster rotation.</p>
+
+          <div class="radio-group-label" id="alg-label">Algorithm</div>
+          <div class="radio-group" role="radiogroup" aria-labelledby="alg-label" data-radio-group="algorithm">
+            <label class="radio" data-value="kyber-512">
+              <input type="radio" name="algorithm" value="kyber-512" />
+              <span class="radio-mark" aria-hidden="true"></span>
+              <span class="radio-label">
+                <span class="radio-title">ML-KEM-512</span>
+                <span class="radio-desc">NIST Level 1 · 128-bit equivalent. Smallest keys, fastest.</span>
+                <span class="radio-meta">public 800 B · ciphertext 768 B</span>
+              </span>
+            </label>
+
+            <label class="radio is-checked" data-value="kyber-768">
+              <input type="radio" name="algorithm" value="kyber-768" checked />
+              <span class="radio-mark" aria-hidden="true"></span>
+              <span class="radio-label">
+                <span class="radio-title">ML-KEM-768 <span class="radio-rec">Recommended</span></span>
+                <span class="radio-desc">NIST Level 3 · 192-bit equivalent. Balanced for IoT.</span>
+                <span class="radio-meta">public 1184 B · ciphertext 1088 B</span>
+              </span>
+            </label>
+
+            <label class="radio" data-value="kyber-1024">
+              <input type="radio" name="algorithm" value="kyber-1024" />
+              <span class="radio-mark" aria-hidden="true"></span>
+              <span class="radio-label">
+                <span class="radio-title">ML-KEM-1024</span>
+                <span class="radio-desc">NIST Level 5 · 256-bit equivalent. Maximum margin.</span>
+                <span class="radio-meta">public 1568 B · ciphertext 1568 B</span>
+              </span>
+            </label>
+          </div>
+
+          <div class="radio-group-label" id="rot-label">Key rotation</div>
+          <div class="radio-group" role="radiogroup" aria-labelledby="rot-label" data-radio-group="rotation">
+            <label class="radio" data-value="7">
+              <input type="radio" name="rotation" value="7" />
+              <span class="radio-mark" aria-hidden="true"></span>
+              <span class="radio-label">
+                <span class="radio-title">Every 7 days</span>
+                <span class="radio-desc">High-rotation policy for compliance-sensitive work.</span>
+              </span>
+            </label>
+            <label class="radio is-checked" data-value="30">
+              <input type="radio" name="rotation" value="30" checked />
+              <span class="radio-mark" aria-hidden="true"></span>
+              <span class="radio-label">
+                <span class="radio-title">Every 30 days <span class="radio-rec">Recommended</span></span>
+                <span class="radio-desc">The default most teams pick.</span>
+              </span>
+            </label>
+            <label class="radio" data-value="90">
+              <input type="radio" name="rotation" value="90" />
+              <span class="radio-mark" aria-hidden="true"></span>
+              <span class="radio-label">
+                <span class="radio-title">Every 90 days</span>
+                <span class="radio-desc">Lower operational overhead for constrained devices.</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <aside class="step-aside" aria-label="Step 3 tip">
+          <div class="tip-card">
+            <div class="tip-card-icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            </div>
+            <div class="tip-card-title">Reading the options</div>
+            <div class="tip-card-body">
+              <p style="margin:0 0 var(--s-3)"><strong>ML-KEM-768</strong> is NIST's recommended all-purpose level. Use it unless a regulator says otherwise.</p>
+              <p style="margin:0 0 var(--s-3)"><strong>Rotation</strong> trades security against operational cost. 30 days is a reasonable default.</p>
+              <p style="margin:0">You can change both later — they only apply to <em>new</em> keys issued from now on.</p>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <div class="footer" data-step-footer="3">
+        <button type="button" class="btn btn-secondary" data-action="back">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+          Back
+        </button>
+        <button type="button" class="btn btn-primary" data-action="next">
+          Continue
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        </button>
+      </div>
+
+      <!-- ============ STEP 4: Confirm ============ -->
+      <section class="step" data-step="4" aria-labelledby="step4-title">
+        <div class="card-body step-main">
+          <h2 class="step-heading" id="step4-title">Ready to deploy</h2>
+          <p class="step-sub">Your device will pull key material on first connect. You can edit any field later from the device page.</p>
+
+          <div class="summary" id="summary" aria-live="polite">
+            <!-- filled by JS -->
+          </div>
+
+          <label class="checkbox">
+            <input type="checkbox" id="terms" />
+            <span class="checkbox-box" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 12 10 17 19 7"/></svg>
+            </span>
+            <span class="checkbox-text">
+              I understand this device will enroll in the PULSE fleet. <a href="#" onclick="event.preventDefault();">Read the device agreement</a>.
+            </span>
+          </label>
+        </div>
+
+        <aside class="step-aside" aria-label="Step 4 tip">
+          <div class="tip-card">
+            <div class="tip-card-icon" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
+            <div class="tip-card-title">Almost done</div>
+            <div class="tip-card-body">
+              <p style="margin:0 0 var(--s-3)">Deploy generates a one-time <strong>device certificate</strong> signed with your chosen key pair.</p>
+              <p style="margin:0 0 var(--s-3)">Your device will get a <strong>JSON Web Token</strong> (JWT) it uses for all future API calls.</p>
+              <p style="margin:0">Nothing happens to your hardware — your device will check in on its next online moment.</p>
+            </div>
+          </div>
+        </aside>
+      </section>
+
+      <div class="footer" data-step-footer="4">
+        <button type="button" class="btn btn-secondary" data-action="back">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+          Back
+        </button>
+        <button type="button" class="btn btn-primary" data-action="deploy">
+          Deploy device
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="5 12 10 17 19 7"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+(function () {
+  'use strict';
+
+  /* =================== Active tab =================== */
+  (function markActiveDemoTab() {
+    var t = document.querySelector('meta[name="active-tab"]');
+    if (!t) return;
+    var key = t.getAttribute('content');
+    document.querySelectorAll('.demo-tab[data-tab="' + key + '"]').forEach(function (el) {
+      el.classList.add('is-active');
+    });
+  })();
+
+  // ---------- Demo data ----------
+  const DEMO = {
+    device: 'gateway',
+    deviceName: 'Edge gateway',
+    apiKey: 'qsk_aB3xY9mK7pQ2rT5vN8wE1zC4dF6hJ0kL',
+    endpoint: 'https://api.quantum-shield.example',
+    region: 'ap-southeast-1',
+    algorithm: 'kyber-768',
+    rotation: '30',
+    terms: true,
+  };
+
+  // ---------- persistence ----------
+  const STORAGE_KEY = 'qs-wizard-v2';
+  const TOUR_KEY = 'qs-wizard-tour-dismissed';
+
+  function loadState() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+  }
+  function saveState(s) {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(s)); } catch (e) {}
+  }
+  function clearState() {
+    try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+  }
+  function tourDismissed() {
+    try { return localStorage.getItem(TOUR_KEY) === '1'; } catch (e) { return false; }
+  }
+  function dismissTour() {
+    try { localStorage.setItem(TOUR_KEY, '1'); } catch (e) {}
+  }
+
+  // ---------- State init ----------
+  function initialState() {
+    const saved = loadState();
+    if (saved && saved.device && saved.apiKey && saved.endpoint) return saved;
+    return Object.assign({}, DEMO, { step: 1, completed: false });
+  }
+  const state = initialState();
+
+  // ---------- DOM refs ----------
+  const stepNodes = document.querySelectorAll('.step-node');
+  const progressLine = document.getElementById('progressLine');
+  const cardRoot = document.getElementById('cardRoot');
+  const tourBanner = document.getElementById('tourBanner');
+  const demoToggle = document.getElementById('demoToggle');
+
+  // ---------- tour banner ----------
+  if (tourDismissed()) tourBanner.classList.add('is-hidden');
+  const tourCloseBtn = document.getElementById('tourClose');
+  if (tourCloseBtn) {
+    tourCloseBtn.addEventListener('click', () => {
+      tourBanner.classList.add('is-hidden');
+      dismissTour();
+    });
+  }
+
+  // ---------- demo toggle ----------
+  demoToggle.addEventListener('click', () => {
+    if (demoToggle.getAttribute('aria-pressed') === 'true') {
+      // Switch to manual mode: clear data, reset
+      clearState();
+      state.device = null;
+      state.apiKey = '';
+      state.endpoint = '';
+      state.region = 'ap-southeast-1';
+      state.algorithm = 'kyber-768';
+      state.rotation = '30';
+      state.terms = false;
+      state.step = 1;
+      state.completed = false;
+      showStep(1);
+      applyValuesToInputs();
+      demoToggle.setAttribute('aria-pressed', 'false');
+      demoToggle.innerHTML = '<span class="demo-toggle-dot" aria-hidden="true"></span> Manual mode · empty fields';
+    } else {
+      // Switch back to demo mode
+      Object.assign(state, DEMO);
+      state.step = 1;
+      state.completed = false;
+      showStep(1);
+      applyValuesToInputs();
+      demoToggle.setAttribute('aria-pressed', 'true');
+      demoToggle.innerHTML = '<span class="demo-toggle-dot" aria-hidden="true"></span> Demo mode · sample data';
+    }
+  });
+
+  function applyValuesToInputs() {
+    if (state.device) {
+      const target = document.querySelector(`.choice[data-choice="${state.device}"]`);
+      if (target && !target.classList.contains('is-selected')) target.click();
+    }
+    // Defensive: ensure step-1 Continue button is enabled whenever a device is set.
+    // (The choice click handler normally enables it, but guard against stale localStorage
+    // or any case where the synthetic click didn't fire.)
+    if (state.device) {
+      document.querySelectorAll('.step[data-step="1"] [data-action="next"]').forEach(b => { b.disabled = false; });
+    }
+    const apiKey = document.getElementById('apiKey');
+    const endpoint = document.getElementById('endpoint');
+    const region = document.getElementById('region');
+    if (apiKey) apiKey.value = state.apiKey || '';
+    if (endpoint) endpoint.value = state.endpoint || '';
+    if (region) region.value = state.region || 'ap-southeast-1';
+
+    document.querySelectorAll('[data-radio-group="algorithm"] .radio').forEach(label => {
+      const input = label.querySelector('input');
+      const match = input.value === state.algorithm;
+      label.classList.toggle('is-checked', match);
+      input.checked = match;
+    });
+    document.querySelectorAll('[data-radio-group="rotation"] .radio').forEach(label => {
+      const input = label.querySelector('input');
+      const match = input.value === state.rotation;
+      label.classList.toggle('is-checked', match);
+      input.checked = match;
+    });
+    const terms = document.getElementById('terms');
+    if (terms) {
+      terms.checked = !!state.terms;
+      const deploy = document.querySelector('.step[data-step="4"] [data-action="deploy"]');
+      if (deploy) deploy.disabled = !terms.checked;
+    }
+  }
+
+  // ---------- Render progress ----------
+  function renderProgress() {
+    stepNodes.forEach((node, i) => {
+      const idx = i + 1;
+      node.classList.toggle('is-active', idx === state.step);
+      node.classList.toggle('is-done', idx < state.step);
+      const circle = node.querySelector('.step-node-circle');
+      if (idx < state.step) {
+        circle.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 12 10 17 19 7"/></svg>';
+      } else {
+        circle.textContent = idx;
+      }
+    });
+    // progress fill
+    const pct = state.step === 1 ? 0 : ((state.step - 1) / 3) * 100;
+    progressLine.style.width = pct + '%';
+  }
+
+  function showStep(n) {
+    state.step = n;
+    document.querySelectorAll('.step').forEach(el => {
+      el.classList.toggle('is-active', Number(el.dataset.step) === n);
+    });
+    document.querySelectorAll('[data-step-footer]').forEach(el => {
+      el.style.display = Number(el.dataset.stepFooter) === n ? 'flex' : 'none';
+    });
+    renderProgress();
+    saveState(state);
+    if (n === 4) renderSummary();
+    // focus
+    setTimeout(() => {
+      const target = document.querySelector(`.step[data-step="${n}"] input, .step[data-step="${n}"] .choice, .step[data-step="${n}"] .btn:not(:disabled)`);
+      if (target) target.focus({ preventScroll: false });
+    }, 80);
+  }
+
+  // ---------- Step 1 ----------
+  document.querySelectorAll('.choice').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.choice').forEach(b => {
+        b.classList.remove('is-selected');
+        b.setAttribute('aria-checked', 'false');
+      });
+      btn.classList.add('is-selected');
+      btn.setAttribute('aria-checked', 'true');
+      state.device = btn.dataset.choice;
+      state.deviceName = btn.dataset.name;
+      const next = btn.closest('.step').querySelector('[data-action="next"][disabled]');
+      // enable all next buttons in step 1
+      document.querySelectorAll('.step[data-step="1"] [data-action="next"]').forEach(b => b.disabled = false);
+      saveState(state);
+    });
+  });
+
+  // ---------- Validation ----------
+  const validators = {
+    apiKey(value) {
+      if (!value) return 'API key is required so devices can authenticate.';
+      if (!/^qsk_[A-Za-z0-9]{32}$/.test(value))
+        return 'API key must start with "qsk_" followed by exactly 32 letters or digits.';
+      return null;
+    },
+    endpoint(value) {
+      if (!value) return 'Endpoint URL is required.';
+      try {
+        const u = new URL(value);
+        if (u.protocol !== 'https:') return 'Use https:// — non-TLS endpoints are rejected.';
+        if (!u.hostname || u.hostname.indexOf('.') === -1) return 'Endpoint hostname looks empty.';
+      } catch (e) {
+        return 'Enter a full URL like https://api.example.com';
+      }
+      return null;
+    },
+  };
+
+  function setFieldStatus(input, status, message) {
+    input.classList.remove('is-error', 'is-valid', 'is-shaking');
+    const helper = document.getElementById(input.id + '-helper');
+    if (!helper) return;
+    if (!input.dataset.originalHelper) input.dataset.originalHelper = helper.textContent;
+    helper.classList.remove('is-error');
+    helper.textContent = input.dataset.originalHelper;
+    if (status === 'error') {
+      helper.classList.add('is-error');
+      helper.textContent = '⚠ ' + message;
+      input.classList.add('is-error', 'is-shaking');
+      input.addEventListener('animationend', () => input.classList.remove('is-shaking'), { once: true });
+    } else if (status === 'valid') {
+      input.classList.add('is-valid');
+    }
+  }
+
+  function validateField(input) {
+    const v = validators[input.dataset.validate];
+    if (!v) return true;
+    const err = v(input.value.trim());
+    if (err) {
+      setFieldStatus(input, 'error', err);
+      return false;
+    }
+    setFieldStatus(input, 'valid');
+    return true;
+  }
+
+  // ---------- Step 2 fields ----------
+  let debounceTimer;
+  function attachFieldHandlers() {
+    ['apiKey', 'endpoint'].forEach(id => {
+      const input = document.getElementById(id);
+      if (!input) return;
+      const helper = document.getElementById(id + '-helper');
+      if (helper) input.dataset.originalHelper = helper.textContent;
+      input.addEventListener('input', () => {
+        state[id] = input.value;
+        saveState(state);
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          if (input.value) validateField(input);
+        }, 350);
+      });
+      input.addEventListener('blur', () => {
+        if (input.value) validateField(input);
+      });
+    });
+    const region = document.getElementById('region');
+    if (region) {
+      region.addEventListener('change', () => {
+        state.region = region.value;
+        saveState(state);
+      });
+    }
+  }
+
+  function credentialsAreValid() {
+    let ok = true;
+    ['apiKey', 'endpoint'].forEach(id => {
+      const input = document.getElementById(id);
+      if (!input) { ok = false; return; }
+      if (!validateField(input)) ok = false;
+    });
+    return ok;
+  }
+
+  // ---------- Step 3 radios ----------
+  function attachRadioHandlers() {
+    ['algorithm', 'rotation'].forEach(group => {
+      document.querySelectorAll(`[data-radio-group="${group}"] .radio`).forEach(label => {
+        const input = label.querySelector('input');
+        const sync = () => {
+          document.querySelectorAll(`[data-radio-group="${group}"] .radio`).forEach(l => {
+            l.classList.toggle('is-checked', l === label);
+          });
+          if (input.checked) {
+            state[group] = input.value;
+            saveState(state);
+          }
+        };
+        label.addEventListener('click', (e) => {
+          if (e.target.tagName !== 'INPUT') {
+            input.checked = true;
+            sync();
+          }
+        });
+        input.addEventListener('change', sync);
+      });
+    });
+  }
+
+  // ---------- Step 4 summary ----------
+  function renderSummary() {
+    const regionName = document.querySelector(`#region option[value="${state.region}"]`)?.textContent || state.region;
+    const root = document.getElementById('summary');
+    root.innerHTML = `
+      <div class="summary-row">
+        <span class="summary-key">Device</span>
+        <span class="summary-value">${escapeHtml(state.deviceName || '—')}</span>
+      </div>
+      <div class="summary-row">
+        <span class="summary-key">API key</span>
+        <span class="summary-value"><code>${maskKey(state.apiKey)}</code></span>
+      </div>
+      <div class="summary-row">
+        <span class="summary-key">Endpoint</span>
+        <span class="summary-value">${escapeHtml(state.endpoint || '—')}</span>
+      </div>
+      <div class="summary-row">
+        <span class="summary-key">Region</span>
+        <span class="summary-value">${escapeHtml(regionName)}</span>
+      </div>
+      <div class="summary-row">
+        <span class="summary-key">Algorithm</span>
+        <span class="summary-value">${escapeHtml(humanAlgorithm(state.algorithm))}</span>
+      </div>
+      <div class="summary-row">
+        <span class="summary-key">Key rotation</span>
+        <span class="summary-value">Every ${state.rotation} days</span>
+      </div>
+    `;
+
+    const terms = document.getElementById('terms');
+    terms.checked = !!state.terms;
+    const deploy = document.querySelector('.step[data-step="4"] [data-action="deploy"]');
+    deploy.disabled = !terms.checked;
+    terms.onchange = () => {
+      state.terms = terms.checked;
+      saveState(state);
+      deploy.disabled = !terms.checked;
+    };
+  }
+
+  function maskKey(k) {
+    if (!k) return '—';
+    if (k.length <= 8) return '•'.repeat(k.length);
+    return k.slice(0, 4) + '•'.repeat(Math.max(k.length - 8, 4)) + k.slice(-4);
+  }
+  function humanAlgorithm(v) {
+    return ({
+      'kyber-512': 'ML-KEM-512 · NIST Level 1',
+      'kyber-768': 'ML-KEM-768 · NIST Level 3',
+      'kyber-1024': 'ML-KEM-1024 · NIST Level 5',
+    })[v] || v;
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[c]);
+  }
+
+  // ---------- Navigation ----------
+  document.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-action]');
+    if (!t) return;
+    const action = t.dataset.action;
+    // step lives in either the active <section> OR the sibling footer (footer is outside the .step in v2 layout)
+    const stepSection = t.closest('.step');
+    const stepFooter = t.closest('[data-step-footer]');
+    const step = stepSection
+      ? Number(stepSection.dataset.step)
+      : (stepFooter ? Number(stepFooter.dataset.stepFooter) : null);
+    if (action === 'next') {
+      e.preventDefault();
+      if (step === 1 && !state.device) return;
+      if (step === 2 && !credentialsAreValid()) return;
+      if (step && step < 4) showStep(step + 1);
+    }
+    if (action === 'back') {
+      e.preventDefault();
+      if (step && step > 1) showStep(step - 1);
+    }
+    if (action === 'deploy') {
+      e.preventDefault();
+      if (t.disabled) return;
+      t.disabled = true;
+      const original = t.innerHTML;
+      t.innerHTML = '<span class="spinner" aria-hidden="true"></span> Deploying…';
+      setTimeout(() => {
+        state.completed = true;
+        saveState(state);
+        showSuccess();
+      }, 1100);
+    }
+  });
+
+  // Enter to advance, except on buttons (they handle their own click)
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const target = e.target;
+    if (target.tagName === 'TEXTAREA' || target.tagName === 'BUTTON') return;
+    const stepRoot = document.querySelector(`.step[data-step="${state.step}"]`);
+    if (!stepRoot) return;
+    const primary = stepRoot.querySelector('[data-action="next"], [data-action="deploy"]');
+    if (primary && !primary.disabled) primary.click();
+  });
+
+  // ---------- Success ----------
+  function showSuccess() {
+    const deviceName = state.deviceName || 'your device';
+    // handoff: write device context so spectrum-analyzer can show it
+    try {
+      localStorage.setItem('qs-spectrum-site', JSON.stringify({
+        deviceName: state.deviceName,
+        endpoint:   state.endpoint,
+        region:     state.region,
+        algorithm:  state.algorithm,
+        rotation:   state.rotation,
+        apiKey:     state.apiKey,
+        completedAt: new Date().toISOString(),
+      }));
+      // also clear any previous "tour completed" so analyzer's Driver.js tour replays
+      localStorage.removeItem('qs-spectrum-tour-completed-v4');
+    } catch (e) {}
+    cardRoot.innerHTML = `
+      <div class="success">
+        <div class="success-icon" aria-hidden="true">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline class="check-path" points="5 12 10 17 19 7"/>
+          </svg>
+        </div>
+        <h2>${escapeHtml(deviceName)} enrolled.</h2>
+        <p>Configuration saved. The device will pull key material on first connect — typically under 30 seconds once it's online.</p>
+        <div class="success-actions">
+          <a href="./spectrum-analyzer.html?from=wizard" class="btn btn-primary">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+            เปิด Dashboard
+          </a>
+          <a href="./landing-demo.html?from=wizard-success" class="btn btn-secondary">กลับไปหน้า Landing</a>
+          <button type="button" class="btn btn-secondary" data-action="reset">Set up another device</button>
+        </div>
+        <div class="success-meta">Reference ID: <code>qs-${Math.random().toString(36).slice(2, 10)}</code></div>
+      </div>
+    `;
+    document.querySelector('[data-action="reset"]').addEventListener('click', () => {
+      clearState();
+      location.reload();
+    });
+    renderProgress();
+  }
+
+  // ---------- boot ----------
+  function boot() {
+    attachFieldHandlers();
+    attachRadioHandlers();
+    applyValuesToInputs();
+    if (state.completed) {
+      showSuccess();
+      return;
+    }
+    showStep(state.step);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+</script>
+</body>
+</html>
